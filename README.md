@@ -65,8 +65,12 @@ the token never leaves the host.
    - `%APPDATA%\Autodesk\Autodesk Fusion\API\AddIns\`
 4. In Fusion: **Shift+S ▸ Add-Ins ▸ FusionEqBridge ▸ Run**. The Text Commands
    window logs `listening on http://127.0.0.1:7654` and the token path.
-5. (For testing the plugin itself) also install `eqcurve/addin/EquationCurve`
-   the same way, or just build curves via the bridge `execute` tool.
+5. Add the **EquationCurve** plugin **in place** (do NOT copy it): Fusion ▸
+   Shift+S ▸ the green **+** ▸ pick `eqcurve/addin/EquationCurve` inside the
+   project. It imports the `eqcurve` package by walking up to the project root,
+   so it must run from the project tree (copying it into AddIns breaks the
+   import). Then **Run** it — three commands appear in Sketch ▸ Create:
+   *Equation Curve*, *Edit Equation Curve*, *Regenerate Equation Curves*.
 
 > The token is auto-created at `%LOCALAPPDATA%\fusion-eqbridge\secret`.
 
@@ -127,14 +131,29 @@ read `result`/`stdout` → `screenshot` → iterate.
 
 ---
 
-## 5. Roadmap (from the feature spec)
+## 5. Status (against the feature spec)
 
-- **MVP (this scaffold):** create curve from a dialog/bridge; store CurveDef for
-  re-open; full function library incl. native hyperbolics; 2D/3D + all coord
-  systems; closed curves; singularity-safe sampling.
-- **Next:** parameter-associative **Custom Feature** (timeline node, double-click
-  re-edit, auto-recompute when D-params change) — implement against the narrow
-  base-feature/sketch compute path, validated through the bridge.
-- **Later:** adaptive (curvature) sampling with deviation tolerance; preset
-  catalog UI; import/export of definitions; `z=f(x,y)` surface module.
+- **MS-1 — done:** create curve; lossless `CurveDef` store + re-edit; full
+  function library incl. native hyperbolics; 2D/3D + all coord systems; closed
+  curves; singularity-safe **segmentation** (e.g. `tan` over `[-pi,pi]` builds
+  several splines instead of one bridging the asymptotes); deterministic
+  curvature-adaptive sampling (opt-in); self-intersection/degenerate diagnostics.
+- **MS-2 — done:** parameter-associative **Custom Feature** — a timeline node
+  that **auto-recomputes when a referenced design parameter changes** (verified
+  live: `AMP` 10→40 mm rescales the curve), built inside a base feature for the
+  reliable compute path, double-click **Edit**, and a **Regenerate** fallback
+  command (PC-8). See `eqcurve/addin/EquationCurve/custom_feature.py`.
+- **Later (MS-3):** preset catalog, real-time preview, origin/rotation transform,
+  definition import/export, richer error messages, `z=f(x,y)` surface module.
+
+### Units & limitations
+
+- **Units (FR-8.5):** in equations a **length** parameter is read in **mm** (a
+  `50 mm` parameter is `50`), via `unitsManager`; angle/unitless params keep their
+  raw value. Conversion lives only in `eqcurve/adapter.py` (`read_design_params`).
+- **Add-in residency (PC-7):** the curve is only live while the `EquationCurve`
+  add-in is loaded. Opened on a machine without it, the geometry is static (dumb).
+- **Recompute (PC-8):** editing a **mirrored** parameter recomputes silently.
+  Some model-graph changes may instead leave the feature marked for update — use
+  **Regenerate Equation Curves** (or any model recompute) to refresh.
 ```

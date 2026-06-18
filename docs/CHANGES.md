@@ -57,4 +57,45 @@ vendor docs). Items marked **DELTA** change an assumption in the spec.
   full agent test loop (TEST-2) works end-to-end.
 - Core acceptance tests: **12 passed** via `pytest` on system Python (DEV-5, TEST-1a).
 - Not yet present: **git** (project is not a repo — version control recommended
-  before further edits).
+  before further edits). *(Resolved: portable Git installed, repo initialized.)*
+
+### C0 Custom Features live spike — 2026-06-18 (build 2703.1.20)
+
+Resolved every MS-2 unknown by actually building custom features in scratch
+documents via the bridge (read-only to the user's design; scratch docs closed
+without saving). **The full parametric auto-recompute path is proven working.**
+
+Confirmed API recipe (use verbatim):
+- `cdef = adsk.fusion.CustomFeatureDefinition.create(id, name, iconFolder)` —
+  **iconFolder must be a real existing directory** (`""` raises "Invalid argument
+  iconFolder"). We pass the add-in folder.
+- `cdef.editCommandId = EDIT_ID` — **only valid after that CommandDefinition is
+  registered** ("Invalid command Id" otherwise). Register edit/regen commands first.
+- compute event = `cdef.customFeatureCompute.add(CustomFeatureEventHandler())`.
+- Create: `base = comp.features.baseFeatures.add()` → `base.startEdit()` → add
+  sketch + fitted splines → `base.finishEdit()`; then
+  `cfin = comp.features.customFeatures.createInput(cdef)`;
+  `cfin.addCustomParameter(id, name, ValueInput.createByString(PARAM), units, True)`
+  (arity-5; the **createByString expression mirrors the design param** so editing
+  it re-fires compute); `cfin.addDependency(id, paramEntity)` (a **UserParameter
+  is accepted** as the entity); `cfin.setStartAndEndFeatures(base, base)`;
+  `cf = comp.features.customFeatures.add(cfin)`.
+- **`cf.baseFeature` is None** and `cf.features` / `base.sketches` are bare vectors
+  (no `.count`). So we DON'T use `cf.baseFeature`; instead store
+  `base.entityToken` + `sketch.entityToken` in `cf.attributes` at create and
+  retrieve via `design.findEntityByToken(tok)[0]` in compute.
+- Compute (verified): `base.startEdit()` → delete old splines → rebuild from the
+  stored CurveDef + current params → `base.finishEdit()` **works inside the
+  compute event**. Changing `AMP` 10 mm → 30 mm + `design.computeAll()` re-fired
+  compute and the geometry actually changed (max-y 2.0 → 6.0). **FR-8.2 met.**
+- Custom params are auto-named (d1, d2…); the design-param link is the
+  expression, not the name. Read live values in compute via
+  `adapter.read_design_params(design)` (unit-safe).
+- Regenerate fallback (PC-8) = `design.computeAll()` (confirmed).
+- `addCustomParameter` first two args are id/name but the resulting
+  `ModelParameter.name` is auto-assigned — don't rely on it.
+
+Still to verify when implementing C4 (edit): how the edit command surfaces the
+double-clicked feature (activeSelections vs an edit context). Editing may not even
+need the PC-6 timeline rollback — updating the stored CurveDef attribute + custom
+params and calling `computeAll()` rebuilds via the compute handler.
