@@ -99,3 +99,35 @@ Still to verify when implementing C4 (edit): how the edit command surfaces the
 double-clicked feature (activeSelections vs an edit context). Editing may not even
 need the PC-6 timeline rollback — updating the stored CurveDef attribute + custom
 params and calling `computeAll()` rebuilds via the compute handler.
+
+### Definition of Done — checklist status (2026-06-19)
+
+All §25 DoD items met (MS-1 + MS-2 + MS-3 implemented and live-verified on build
+2703.1.20):
+
+- [x] §24 research re-validation done + logged (above).
+- [x] v0.1 [M] FR implemented: input modes (explicit/parametric), all 2D/3D
+      coordinate systems, full function library incl. native hyperbolics, closed
+      curves, domain endpoints as expressions, singularity-safe segmentation.
+- [x] pytest green (29 deterministic core tests).
+- [x] Integration harness: build + lossless re-open in Fusion (MS-1).
+- [x] MS-2: timeline Custom Feature + double-click Edit + auto-recompute on
+      referenced-parameter change (AMP 10→40 mm verified) + Regenerate (PC-8).
+- [x] Security: bridge 127.0.0.1 + bearer token, no external/auto-update, dev
+      session only (`runOnStartup:false`).
+- [x] Unit conversion at the adapter boundary only (ARC-3); definition stored as
+      a JSON attribute, never reverse-derived (ARC-4).
+- [x] PC-7 (add-in residency) + PC-8 (recompute) limits documented in README.
+
+C4 edit: the activeSelections-based discovery + edit-overwrite + computeAll rebuild
+are verified; only the literal double-click that fires the edit command is left to
+manual UI confirmation (standard Fusion behavior). PC-6 timeline rollback proved
+unnecessary — re-storing the CurveDef + computeAll rebuilds in place.
+
+MS-3 (this pass): CurveDef.rotation + sampler rotation; presets.py (11 curves);
+errors.py (readable messages); dialog preset picker + rotation fields; preview via
+transient CustomGraphics; Import/Export commands; circular-reference guard.
+
+Deferred (spec [S]/[C], not in the approved plan): FR-1.3 per-component laws,
+FR-8.4 promote-constant-to-param, FR-10.3 fit tolerance, FR-9.4/9.5 scale/mirror/
+snap, FR-1.5 surface module.

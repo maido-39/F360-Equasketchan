@@ -143,8 +143,12 @@ read `result`/`stdout` → `screenshot` → iterate.
   live: `AMP` 10→40 mm rescales the curve), built inside a base feature for the
   reliable compute path, double-click **Edit**, and a **Regenerate** fallback
   command (PC-8). See `eqcurve/addin/EquationCurve/custom_feature.py`.
-- **Later (MS-3):** preset catalog, real-time preview, origin/rotation transform,
-  definition import/export, richer error messages, `z=f(x,y)` surface module.
+- **MS-3 — done:** preset catalog (11 curves), real-time preview (transient
+  custom graphics), origin + Euler rotation transform, definition import/export
+  (JSON), readable error messages, circular-reference guard.
+- **Future ([S]/[C], out of the current plan):** per-component mixed laws
+  (FR-1.3), promote-local-constant-to-parameter (FR-8.4), chord/deviation fit
+  tolerance (FR-10.3), scale/mirror + snap (FR-9.4/9.5), `z=f(x,y)` surface module.
 
 ### Units & limitations
 
