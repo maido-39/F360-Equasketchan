@@ -106,6 +106,16 @@ def _find_eqcurve_feature():
     return None
 
 
+def _find_eqcurve_spline():
+    """A selected sketch-embedded equation-curve spline (re-editable in place)."""
+    sels = _ui.activeSelections
+    for i in range(sels.count):
+        ent = sels.item(i).entity
+        if adsk.fusion.SketchFittedSpline.cast(ent) and adapter.is_eqcurve(ent):
+            return ent
+    return None
+
+
 def _check_circular(design, cd):
     """Raise ValueError if the referenced design params form a cycle (FR-8.6)."""
     exprs = {}
@@ -198,7 +208,11 @@ class _CreateCreated(adsk.core.CommandCreatedEventHandler):
             pv = _PreviewHandler()
             cmd.executePreview.add(pv)
             _handlers.append(pv)
-            ex = _CreateExecute()
+            # If a sketch is being edited, embed the curve INTO it; otherwise
+            # create a parametric timeline Custom Feature.
+            aeo = _design().activeEditObject
+            active_sk = aeo if isinstance(aeo, adsk.fusion.Sketch) else None
+            ex = _CreateExecute(active_sk)
             cmd.execute.add(ex)
             _handlers.append(ex)
             de = _DestroyHandler()
@@ -241,14 +255,28 @@ def _sel_entity(inputs, input_id):
 
 
 class _CreateExecute(adsk.core.CommandEventHandler):
+    def __init__(self, active_sketch=None):
+        super().__init__()
+        self._sk = active_sketch
+
     def notify(self, args):
         _clear_preview()
         try:
             inputs = args.command.commandInputs
             cd = dialog.read_inputs(inputs)
-            create_feature(_design(), cd,
-                           plane_ent=_sel_entity(inputs, "plane"),
-                           origin_pt_ent=_sel_entity(inputs, "origin_pt"))
+            design = _design()
+            pt = _sel_entity(inputs, "origin_pt")
+            if self._sk is not None:
+                # SKETCH-EMBED: draw the equation curve into the active sketch.
+                # build_curve_runs stamps the CurveDef + marker on each spline, so
+                # the sketch is fully equation-defined and re-editable (select a
+                # spline -> Edit Equation Curve). Origin point offset honored.
+                adapter.build_curve_runs(self._sk, cd, adapter.read_design_params(design),
+                                         off_cm=_off_cm(self._sk, pt))
+            else:
+                create_feature(design, cd,
+                               plane_ent=_sel_entity(inputs, "plane"),
+                               origin_pt_ent=pt)
         except Exception as exc:
             _ui.messageBox("Equation Curve: " + _describe(exc))
 
@@ -325,16 +353,18 @@ class _EditCreated(adsk.core.CommandCreatedEventHandler):
         try:
             cmd = args.command
             cf = _find_eqcurve_feature()
-            if cf is None:
+            sp = None if cf else _find_eqcurve_spline()
+            if cf is None and sp is None:
                 cmd.commandInputs.addTextBoxCommandInput(
-                    "hint", "", "Select the equation-curve feature, then Edit.", 2, True)
+                    "hint", "", "Select an equation-curve feature or spline, then Edit.", 2, True)
                 return
-            cd = CurveDef.from_json(cf.attributes.itemByName(_GRP, ATTR_DEF).value)
+            cd = (CurveDef.from_json(cf.attributes.itemByName(_GRP, ATTR_DEF).value)
+                  if cf else adapter.read_definition(sp))
             dialog.build_inputs(cmd.commandInputs, cd, _param_names())
             ic = _PresetChanged()
             cmd.inputChanged.add(ic)
             _handlers.append(ic)
-            ex = _EditExecute(cf)
+            ex = _EditExecute(cf) if cf else _EditSplineExecute(sp)
             cmd.execute.add(ex)
             _handlers.append(ex)
         except Exception:
@@ -351,6 +381,22 @@ class _EditExecute(adsk.core.CommandEventHandler):
             cd = dialog.read_inputs(args.command.commandInputs)
             self._cf.attributes.add(_GRP, ATTR_DEF, cd.to_json())
             _design().computeAll()
+        except Exception as exc:
+            _ui.messageBox("Edit Equation Curve: " + _describe(exc))
+
+
+class _EditSplineExecute(adsk.core.CommandEventHandler):
+    """Re-edit a sketch-embedded equation spline in place (rebuild all its runs)."""
+    def __init__(self, spline):
+        super().__init__()
+        self._spline = spline
+
+    def notify(self, args):
+        try:
+            cd = dialog.read_inputs(args.command.commandInputs)
+            design = _design()
+            sibs = adapter.sibling_eqcurve_splines(self._spline)
+            adapter.rebuild_curve(sibs, cd, adapter.read_design_params(design))
         except Exception as exc:
             _ui.messageBox("Edit Equation Curve: " + _describe(exc))
 
@@ -429,7 +475,7 @@ def register(app, ui):
     _app, _ui = app, ui
     # edit/regen/import/export must exist before editCommandId references EDIT_ID
     _button(EDIT_ID, "Edit Equation Curve",
-            "Edit the selected equation-curve feature", _EditCreated(), add_to_panel=False)
+            "Edit the selected equation-curve feature or spline", _EditCreated(), add_to_panel=True)
     _button(REGEN_ID, "Regenerate Equation Curves",
             "Recompute all equation curves (PC-8 fallback)", _RegenCreated())
     _button(EXPORT_ID, "Export Equation Curve",

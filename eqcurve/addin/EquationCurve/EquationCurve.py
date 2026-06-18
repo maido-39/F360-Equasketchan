@@ -18,8 +18,10 @@ import adsk.core
 
 # Make both the project root (for `import eqcurve`) and this add-in folder (for
 # the sibling `dialog`/`custom_feature` modules) importable when Fusion loads us.
+# realpath() resolves a junction in Fusion's AddIns folder back to the real
+# project location, so an installed (junctioned) add-in still finds the package.
 # __file__ = <root>/eqcurve/addin/EquationCurve/EquationCurve.py
-_HERE = os.path.dirname(__file__)
+_HERE = os.path.dirname(os.path.realpath(__file__))
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 for _p in (_PROJECT_ROOT, _HERE):
     if _p not in sys.path:
