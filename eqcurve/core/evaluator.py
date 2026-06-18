@@ -82,6 +82,15 @@ def _build_functions(angle: str):
     }
 
 
+def reserved_names(angle: str = "rad") -> set:
+    """Names that are built into the evaluator (functions + constants).
+
+    Anything an expression references that is NOT in here and not an independent
+    variable is treated as an external design parameter (see core.refs).
+    """
+    return set(_CONSTANTS) | set(_build_functions(angle))
+
+
 _ALLOWED_NODES = (
     ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.Load,
     ast.Constant,

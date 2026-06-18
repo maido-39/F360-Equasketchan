@@ -8,7 +8,7 @@ parameters change. It is adsk-free and pytest-friendly.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, fields
 from typing import Dict, Optional
 
 # Supported modes / coordinate systems (see spec FR-1, FR-2)
@@ -38,6 +38,7 @@ class CurveDef:
     t_max: str = "1"
     samples: int = 200                # number of points (deterministic)
     closed: bool = False              # force-close start==end
+    adaptive: bool = False            # deterministic curvature-adaptive sampling (FR-10.2)
 
     # --- placement (applied after evaluation, in model units = mm) ---
     origin: Dict[str, str] = field(default_factory=lambda: {"x": "0", "y": "0", "z": "0"})
@@ -52,7 +53,10 @@ class CurveDef:
     @classmethod
     def from_json(cls, text: str) -> "CurveDef":
         data = json.loads(text)
-        return cls(**data)
+        # Tolerate unknown keys (forward/backward-compatible re-edit): a JSON
+        # written by a newer/older version still loads with defaults for the rest.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
     def validate(self) -> None:
         if self.mode not in MODES:
