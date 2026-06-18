@@ -6,6 +6,8 @@ from .sampler import (
 )
 from .refs import referenced_names, circular_reference
 from .diagnostics import degenerate_points, self_intersections
+from .presets import preset_names, curvedef_for
+from .errors import describe, warnings_text
 
 __all__ = [
     "CurveDef", "Evaluator", "ExpressionError", "reserved_names",
@@ -13,4 +15,6 @@ __all__ = [
     "is_effectively_closed", "SamplingError",
     "referenced_names", "circular_reference",
     "degenerate_points", "self_intersections",
+    "preset_names", "curvedef_for",
+    "describe", "warnings_text",
 ]

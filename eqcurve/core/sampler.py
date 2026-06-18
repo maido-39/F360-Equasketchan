@@ -88,11 +88,29 @@ def _dist(a: Point, b: Point) -> float:
     return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
 
+def _rotate(p: Point, rot: Point) -> Point:
+    """Rotate a point by Euler angles (radians), order X then Y then Z."""
+    rx, ry, rz = rot
+    x, y, z = p
+    if rx:
+        c, s = math.cos(rx), math.sin(rx)
+        y, z = y * c - z * s, y * s + z * c
+    if ry:
+        c, s = math.cos(ry), math.sin(ry)
+        x, z = x * c + z * s, -x * s + z * c
+    if rz:
+        c, s = math.cos(rz), math.sin(rz)
+        x, y = x * c - y * s, x * s + y * c
+    return (x, y, z)
+
+
 def _eval_one(
     cd: CurveDef, params: Mapping[str, float], ev: Evaluator,
-    keys: List[str], u: float, origin: Point,
+    keys: List[str], u: float, origin: Point, rot: Point,
 ) -> Optional[Point]:
-    """Evaluate the curve at one independent value; None at a singularity."""
+    """Evaluate the curve at one independent value; None at a singularity.
+
+    Applies the local rotation then the origin translation (in mm)."""
     scope = dict(params)
     scope[cd.var] = u
     scope.setdefault("x", u)  # explicit cartesian convenience
@@ -114,6 +132,8 @@ def _eval_one(
         return None
     if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
         return None
+    if rot != (0.0, 0.0, 0.0):
+        x, y, z = _rotate((x, y, z), rot)
     return (x + origin[0], y + origin[1], z + origin[2])
 
 
@@ -159,7 +179,7 @@ def _split_on_jumps(run: Run, gap_factor: float) -> List[Run]:
     return segs
 
 
-def _domain(cd: CurveDef, params: Mapping[str, float]) -> Tuple[Evaluator, float, float, Point, List[str]]:
+def _domain(cd: CurveDef, params: Mapping[str, float]):
     cd.validate()
     ev = Evaluator(angle=cd.angle)
     t0 = ev.eval(cd.t_min, params)
@@ -173,16 +193,22 @@ def _domain(cd: CurveDef, params: Mapping[str, float]) -> Tuple[Evaluator, float
         ev.eval(cd.origin.get("y", "0"), params),
         ev.eval(cd.origin.get("z", "0"), params),
     )
-    return ev, t0, t1, origin, _component_keys(cd)
+    rotd = cd.rotation or {}
+    rot = (
+        _angle_to_rad(ev.eval(rotd.get("x", "0"), params), cd.angle),
+        _angle_to_rad(ev.eval(rotd.get("y", "0"), params), cd.angle),
+        _angle_to_rad(ev.eval(rotd.get("z", "0"), params), cd.angle),
+    )
+    return ev, t0, t1, origin, rot, _component_keys(cd)
 
 
 def sample_runs(cd: CurveDef, params: Optional[Mapping[str, float]] = None) -> List[Run]:
     """Uniformly sample the curve, returning singularity-split runs (mm)."""
     params = dict(params or {})
-    ev, t0, t1, origin, keys = _domain(cd, params)
+    ev, t0, t1, origin, rot, keys = _domain(cd, params)
     n = cd.samples
     raw = [
-        _eval_one(cd, params, ev, keys, t0 + (t1 - t0) * (i / (n - 1)), origin)
+        _eval_one(cd, params, ev, keys, t0 + (t1 - t0) * (i / (n - 1)), origin, rot)
         for i in range(n)
     ]
     runs = _segment(raw)
@@ -215,12 +241,12 @@ def adaptive_sample_runs(
     curve and the thresholds, so output is deterministic (NFR-4).
     """
     params = dict(params or {})
-    ev, t0, t1, origin, keys = _domain(cd, params)
+    ev, t0, t1, origin, rot, keys = _domain(cd, params)
     seed = max(2, min(seed, cd.samples))
     tol = math.radians(angle_tol_deg)
 
     def pt(u: float) -> Optional[Point]:
-        return _eval_one(cd, params, ev, keys, u, origin)
+        return _eval_one(cd, params, ev, keys, u, origin, rot)
 
     ts = {t0 + (t1 - t0) * (i / (seed - 1)) for i in range(seed)}
 

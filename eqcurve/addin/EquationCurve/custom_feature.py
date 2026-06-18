@@ -1,18 +1,8 @@
-"""MS-2: Equation Curve as a parametric timeline Custom Feature.
+"""MS-2 + MS-3: Equation Curve as a parametric timeline Custom Feature.
 
-Recipe verified live on build 2703.1.20 (see docs/CHANGES.md, C0 spike):
-  create  -> baseFeatures.add -> startEdit -> sketch + fitted splines ->
-             finishEdit; then customFeatures.createInput(cdef),
-             addCustomParameter(ValueInput.createByString(<param>)) to mirror each
-             referenced design parameter (its expression references the param, so
-             editing the param re-fires compute) + addDependency(<param>);
-             setStartAndEndFeatures(base, base); customFeatures.add(input).
-             CurveDef JSON + base/sketch entityTokens are stored on cf.attributes.
-  compute -> findEntityByToken(base/sketch) -> base.startEdit -> clear splines ->
-             rebuild from the stored CurveDef + live params -> base.finishEdit.
-  edit    -> editCommandId command restores the dialog from cf.attributes; on OK
-             it overwrites the stored CurveDef and computeAll() rebuilds.
-  regen   -> design.computeAll() (PC-8 fallback).
+Create / compute / edit recipe verified live on build 2703.1.20 (docs/CHANGES.md
+C0 spike). MS-3 additions: preset picker, real-time preview, origin+rotation,
+import/export, readable error messages, circular-reference guard.
 """
 
 import os
@@ -24,24 +14,31 @@ import adsk.fusion
 
 import dialog
 from eqcurve import adapter
-from eqcurve.core import CurveDef, referenced_names
+from eqcurve.core import (
+    CurveDef, referenced_names, circular_reference, runs_for,
+)
+from eqcurve.core import describe as _describe  # readable error text (FR-12.5)
 
 CF_DEF_ID = "eqcurve_customfeature"
 CREATE_ID = "eqcurve_create"
 EDIT_ID = "eqcurve_edit"
 REGEN_ID = "eqcurve_regen"
+EXPORT_ID = "eqcurve_export"
+IMPORT_ID = "eqcurve_import"
 PANEL_ID = "SketchCreatePanel"
 
 _GRP = "eqcurve"
 ATTR_DEF = "curvedef_json"
 ATTR_BASE = "base_token"
 ATTR_SK = "sketch_token"
-_ICON_FOLDER = os.path.dirname(__file__)  # any existing dir (create() requires one)
+_ICON_FOLDER = os.path.dirname(__file__)
+_MM_TO_CM = 0.1
 
 _app = None
 _ui = None
 _handlers = []
 _cdef = None
+_preview_group = None
 
 
 # ---- helpers --------------------------------------------------------------
@@ -57,17 +54,53 @@ def _clear_splines(sketch):
 
 
 def _find_eqcurve_feature():
-    """The selected eqcurve custom feature (for the double-click Edit command)."""
     sels = _ui.activeSelections
     for i in range(sels.count):
-        ent = sels.item(i).entity
-        cf = adsk.fusion.CustomFeature.cast(ent)
+        cf = adsk.fusion.CustomFeature.cast(sels.item(i).entity)
         if cf and cf.attributes.itemByName(_GRP, ATTR_DEF) is not None:
             return cf
     return None
 
 
-# ---- compute --------------------------------------------------------------
+def _check_circular(design, cd):
+    """Raise ValueError if the referenced design params form a cycle (FR-8.6)."""
+    exprs = {}
+    for p in design.userParameters:
+        try:
+            exprs[p.name] = p.expression
+        except Exception:
+            pass
+    cyc = circular_reference(exprs, cd.angle) & referenced_names(cd)
+    if cyc:
+        raise ValueError("Circular parameter reference involving: " + ", ".join(sorted(cyc)))
+
+
+def _clear_preview():
+    global _preview_group
+    if _preview_group is not None:
+        try:
+            _preview_group.deleteMe()
+        except Exception:
+            pass
+        _preview_group = None
+
+
+def _draw_preview(design, cd):
+    """Transient custom-graphics polyline preview of the curve (FR-12.3)."""
+    global _preview_group
+    _clear_preview()
+    runs = runs_for(cd, adapter.read_design_params(design))
+    grp = design.rootComponent.customGraphicsGroups.add()
+    for run in runs:
+        flat = []
+        for x, y, z in run:
+            flat += [x * _MM_TO_CM, y * _MM_TO_CM, z * _MM_TO_CM]
+        coords = adsk.fusion.CustomGraphicsCoordinates.create(flat)
+        grp.addLines(coords, [], True)  # connected line strip
+    _preview_group = grp
+
+
+# ---- compute (verified) ---------------------------------------------------
 
 class _ComputeHandler(adsk.fusion.CustomFeatureEventHandler):
     def notify(self, args):
@@ -103,33 +136,65 @@ class _CreateCreated(adsk.core.CommandCreatedEventHandler):
         try:
             cmd = args.command
             dialog.build_inputs(cmd.commandInputs, None)
-            h = _CreateExecute()
-            cmd.execute.add(h)
-            _handlers.append(h)
+            ic = _PresetChanged()
+            cmd.inputChanged.add(ic)
+            _handlers.append(ic)
+            pv = _PreviewHandler()
+            cmd.executePreview.add(pv)
+            _handlers.append(pv)
+            ex = _CreateExecute()
+            cmd.execute.add(ex)
+            _handlers.append(ex)
+            de = _DestroyHandler()
+            cmd.destroy.add(de)
+            _handlers.append(de)
         except Exception:
             _ui.messageBox("Create dialog failed:\n" + traceback.format_exc())
 
 
-class _CreateExecute(adsk.core.CommandEventHandler):
+class _PresetChanged(adsk.core.InputChangedEventHandler):
+    def notify(self, args):
+        try:
+            dialog.on_preset_changed(args.inputs, args.input)
+        except Exception:
+            pass  # preset fill is best-effort
+
+
+class _PreviewHandler(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
             cd = dialog.read_inputs(args.command.commandInputs)
-            create_feature(_design(), cd)
+            _draw_preview(_design(), cd)
         except Exception:
-            _ui.messageBox("Equation Curve failed:\n" + traceback.format_exc())
+            _clear_preview()  # invalid in-progress input -> no preview, no crash
+
+
+class _DestroyHandler(adsk.core.CommandEventHandler):
+    def notify(self, args):
+        _clear_preview()
+
+
+class _CreateExecute(adsk.core.CommandEventHandler):
+    def notify(self, args):
+        _clear_preview()
+        try:
+            cd = dialog.read_inputs(args.command.commandInputs)
+            create_feature(_design(), cd)
+        except Exception as exc:
+            _ui.messageBox("Equation Curve: " + _describe(exc))
 
 
 def create_feature(design, cd, params=None):
     """Build the curve inside a base feature and wrap it in a Custom Feature.
 
-    Factored out of the command handler so the integration harness can drive it
-    without the dialog. Returns the created CustomFeature.
+    Factored out so the integration harness can drive it without the dialog.
+    Returns the created CustomFeature.
     """
+    _check_circular(design, cd)
     comp = design.activeComponent
     if params is None:
         params = adapter.read_design_params(design)
 
-    # geometry inside a base feature (PC-5 supported compute path)
     base = comp.features.baseFeatures.add()
     base.startEdit()
     sketch = comp.sketches.add(comp.xYConstructionPlane)
@@ -149,9 +214,6 @@ def create_feature(design, cd, params=None):
 
 
 def _mirror_params(design, cfin, cd):
-    """Mirror each referenced design param as a custom param whose expression
-    references it, plus a dependency — so editing the param re-fires compute
-    (FR-8.2). Best-effort: a missing/odd-unit param is skipped, not fatal."""
     for nm in sorted(referenced_names(cd)):
         try:
             p = design.allParameters.itemByName(nm)
@@ -159,16 +221,13 @@ def _mirror_params(design, cfin, cd):
             p = None
         if p is None:
             continue
-        unit = ""
         try:
             unit = p.unit or ""
         except Exception:
             unit = ""
         try:
-            cfin.addCustomParameter(
-                "mir_" + nm, nm,
-                adsk.core.ValueInput.createByString(nm), unit, True,
-            )
+            cfin.addCustomParameter("mir_" + nm, nm,
+                                    adsk.core.ValueInput.createByString(nm), unit, True)
         except Exception:
             pass
         try:
@@ -190,9 +249,12 @@ class _EditCreated(adsk.core.CommandCreatedEventHandler):
                 return
             cd = CurveDef.from_json(cf.attributes.itemByName(_GRP, ATTR_DEF).value)
             dialog.build_inputs(cmd.commandInputs, cd)
-            h = _EditExecute(cf)
-            cmd.execute.add(h)
-            _handlers.append(h)
+            ic = _PresetChanged()
+            cmd.inputChanged.add(ic)
+            _handlers.append(ic)
+            ex = _EditExecute(cf)
+            cmd.execute.add(ex)
+            _handlers.append(ex)
         except Exception:
             _ui.messageBox("Edit dialog failed:\n" + traceback.format_exc())
 
@@ -205,33 +267,64 @@ class _EditExecute(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
             cd = dialog.read_inputs(args.command.commandInputs)
-            # overwrite the stored definition; compute rebuilds geometry. No PC-6
-            # timeline rollback needed — the feature stays in place, only its
-            # definition changes (validated: computeAll re-fires compute).
             self._cf.attributes.add(_GRP, ATTR_DEF, cd.to_json())
             _design().computeAll()
-        except Exception:
-            _ui.messageBox("Edit Equation Curve failed:\n" + traceback.format_exc())
+        except Exception as exc:
+            _ui.messageBox("Edit Equation Curve: " + _describe(exc))
 
 
-# ---- regenerate fallback (PC-8) -------------------------------------------
+# ---- regenerate (PC-8) ----------------------------------------------------
 
 class _RegenCreated(adsk.core.CommandCreatedEventHandler):
     def notify(self, args):
-        try:
-            h = _RegenExecute()
-            args.command.execute.add(h)
-            _handlers.append(h)
-        except Exception:
-            _ui.messageBox("Regenerate failed:\n" + traceback.format_exc())
+        h = _RegenExecute()
+        args.command.execute.add(h)
+        _handlers.append(h)
 
 
 class _RegenExecute(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
             _design().computeAll()
+        except Exception as exc:
+            _ui.messageBox("Regenerate: " + _describe(exc))
+
+
+# ---- import / export (FR-12.6) --------------------------------------------
+
+class _ExportCreated(adsk.core.CommandCreatedEventHandler):
+    def notify(self, args):
+        try:
+            cf = _find_eqcurve_feature()
+            if cf is None:
+                _ui.messageBox("Select an equation-curve feature to export.")
+                return
+            dlg = _ui.createFileDialog()
+            dlg.title = "Export equation curve definition"
+            dlg.filter = "JSON (*.json)"
+            dlg.initialFilename = "equation_curve.json"
+            if dlg.showSave() != adsk.core.DialogResults.DialogOK:
+                return
+            text = cf.attributes.itemByName(_GRP, ATTR_DEF).value
+            with open(dlg.filename, "w", encoding="utf-8") as f:
+                f.write(text)
         except Exception:
-            _ui.messageBox("Regenerate failed:\n" + traceback.format_exc())
+            _ui.messageBox("Export failed:\n" + traceback.format_exc())
+
+
+class _ImportCreated(adsk.core.CommandCreatedEventHandler):
+    def notify(self, args):
+        try:
+            dlg = _ui.createFileDialog()
+            dlg.title = "Import equation curve definition"
+            dlg.filter = "JSON (*.json)"
+            if dlg.showOpen() != adsk.core.DialogResults.DialogOK:
+                return
+            with open(dlg.filename, "r", encoding="utf-8") as f:
+                cd = CurveDef.from_json(f.read())
+            create_feature(_design(), cd)
+        except Exception as exc:
+            _ui.messageBox("Import failed: " + _describe(exc))
 
 
 # ---- registration ---------------------------------------------------------
@@ -252,17 +345,18 @@ def _button(cmd_id, name, tooltip, handler, add_to_panel=True):
 def register(app, ui):
     global _app, _ui, _cdef
     _app, _ui = app, ui
-    # edit + regen commands must exist BEFORE editCommandId is set
+    # edit/regen/import/export must exist before editCommandId references EDIT_ID
     _button(EDIT_ID, "Edit Equation Curve",
             "Edit the selected equation-curve feature", _EditCreated(), add_to_panel=False)
     _button(REGEN_ID, "Regenerate Equation Curves",
             "Recompute all equation curves (PC-8 fallback)", _RegenCreated())
+    _button(EXPORT_ID, "Export Equation Curve",
+            "Export the selected curve definition to JSON", _ExportCreated())
+    _button(IMPORT_ID, "Import Equation Curve",
+            "Create a curve from a JSON definition file", _ImportCreated())
     _button(CREATE_ID, "Equation Curve",
             "Create a parametric math-driven curve", _CreateCreated())
 
-    # A CustomFeatureDefinition cannot be deleted and create() rejects a
-    # duplicate id, so cache it (and its compute handler, to keep it alive)
-    # across add-in reloads / dev Stop-Run cycles via the never-reloaded `sys`.
     _key = "_eqcurve_cdef_" + CF_DEF_ID
     cached = getattr(sys, _key, None)
     if cached is not None:
@@ -278,8 +372,9 @@ def register(app, ui):
 
 
 def unregister():
+    _clear_preview()
     panel = _ui.allToolbarPanels.itemById(PANEL_ID)
-    for cmd_id in (CREATE_ID, EDIT_ID, REGEN_ID):
+    for cmd_id in (CREATE_ID, EDIT_ID, REGEN_ID, EXPORT_ID, IMPORT_ID):
         try:
             if panel:
                 ctrl = panel.controls.itemById(cmd_id)

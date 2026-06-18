@@ -41,7 +41,10 @@ class CurveDef:
     adaptive: bool = False            # deterministic curvature-adaptive sampling (FR-10.2)
 
     # --- placement (applied after evaluation, in model units = mm) ---
+    # Points are rotated about the local origin (Euler X->Y->Z, in `angle` unit),
+    # then translated by `origin`. For 2D only the z rotation has an effect.
     origin: Dict[str, str] = field(default_factory=lambda: {"x": "0", "y": "0", "z": "0"})
+    rotation: Dict[str, str] = field(default_factory=lambda: {"x": "0", "y": "0", "z": "0"})
 
     # free-text note for the user
     note: Optional[str] = None

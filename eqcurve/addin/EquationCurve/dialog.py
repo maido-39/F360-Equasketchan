@@ -1,20 +1,20 @@
 """Shared command-dialog layer for the Equation Curve add-in.
 
-`build_inputs` populates the dialog from a CurveDef (or sensible defaults);
-`read_inputs` reconstructs a CurveDef from the dialog. Both the Create and Edit
-commands use these, so a curve re-opens with every field exactly as saved
-(FR-11.2, lossless round-trip).
+`build_inputs` populates the dialog from a CurveDef (or defaults); `read_inputs`
+reconstructs a CurveDef from the dialog; `apply_curvedef` overwrites existing
+inputs (used by the preset picker). Create and Edit share all three, so a curve
+re-opens with every field exactly as saved (FR-11.2, lossless round-trip).
 """
 
 from __future__ import annotations
 
 import adsk.core
 
-from eqcurve.core import CurveDef
+from eqcurve.core import CurveDef, preset_names, curvedef_for
 
 _TEXTLIST = adsk.core.DropDownStyles.TextListDropDownStyle
+_CUSTOM = "(custom)"
 
-# Defaults shown when creating a new curve (no CurveDef to restore).
 _DEFAULT = CurveDef(
     mode="parametric", coord="cartesian", dim=2,
     exprs={"x": "t", "y": "sin(t)"}, var="t", t_min="0", t_max="2*pi", samples=200,
@@ -25,7 +25,6 @@ _COORDS = ("cartesian", "polar", "cylindrical", "spherical")
 
 
 def _exprs_to_fields(cd: CurveDef):
-    """Map a CurveDef's component expressions back to the (ex, ey, ez) fields."""
     e = cd.exprs or {}
     if cd.mode == "explicit":
         return ("", e.get("y" if cd.coord == "cartesian" else "r", ""), "")
@@ -40,9 +39,18 @@ def _exprs_to_fields(cd: CurveDef):
     return ("", "", "")
 
 
+def _select(dropdown, name):
+    for it in dropdown.listItems:
+        it.isSelected = (it.name == name)
+
+
 def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None) -> None:
     cd = cd or _DEFAULT
-    ex, ey, ez = _exprs_to_fields(cd)
+
+    pin = inputs.addDropDownCommandInput("preset", "Preset", _TEXTLIST)
+    pin.listItems.add(_CUSTOM, True)
+    for name in preset_names():
+        pin.listItems.add(name, False)
 
     mode_in = inputs.addDropDownCommandInput("mode", "Mode", _TEXTLIST)
     for name in _MODES:
@@ -51,6 +59,7 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None) -> None:
     for name in _COORDS:
         coord_in.listItems.add(name, name == cd.coord)
 
+    ex, ey, ez = _exprs_to_fields(cd)
     inputs.addStringValueInput("ex", "x(t) / r(t)", ex)
     inputs.addStringValueInput("ey", "y(t) / r(a) / theta(t)", ey)
     inputs.addStringValueInput("ez", "z(t) / phi(t) / theta(t)", ez)
@@ -58,13 +67,56 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None) -> None:
     inputs.addStringValueInput("tmin", "t min", cd.t_min)
     inputs.addStringValueInput("tmax", "t max", cd.t_max)
     inputs.addIntegerSpinnerCommandInput("samples", "Samples", 2, 20000, 1, cd.samples)
-    origin = cd.origin or {}
-    inputs.addStringValueInput("ox", "Origin X", origin.get("x", "0"))
-    inputs.addStringValueInput("oy", "Origin Y", origin.get("y", "0"))
-    inputs.addStringValueInput("oz", "Origin Z", origin.get("z", "0"))
+    o = cd.origin or {}
+    inputs.addStringValueInput("ox", "Origin X", o.get("x", "0"))
+    inputs.addStringValueInput("oy", "Origin Y", o.get("y", "0"))
+    inputs.addStringValueInput("oz", "Origin Z", o.get("z", "0"))
+    r = cd.rotation or {}
+    inputs.addStringValueInput("rx", "Rotation X", r.get("x", "0"))
+    inputs.addStringValueInput("ry", "Rotation Y", r.get("y", "0"))
+    inputs.addStringValueInput("rz", "Rotation Z", r.get("z", "0"))
     inputs.addBoolValueInput("closed", "Closed", True, "", cd.closed)
     inputs.addBoolValueInput("deg", "Degrees", True, "", cd.angle == "deg")
     inputs.addBoolValueInput("adaptive", "Adaptive sampling", True, "", cd.adaptive)
+
+
+def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
+    """Overwrite already-created inputs from a CurveDef (e.g. a chosen preset)."""
+    _select(inputs.itemById("mode"), cd.mode)
+    _select(inputs.itemById("coord"), cd.coord)
+    ex, ey, ez = _exprs_to_fields(cd)
+    inputs.itemById("ex").value = ex
+    inputs.itemById("ey").value = ey
+    inputs.itemById("ez").value = ez
+    inputs.itemById("var").value = cd.var
+    inputs.itemById("tmin").value = cd.t_min
+    inputs.itemById("tmax").value = cd.t_max
+    inputs.itemById("samples").value = cd.samples
+    o = cd.origin or {}
+    inputs.itemById("ox").value = o.get("x", "0")
+    inputs.itemById("oy").value = o.get("y", "0")
+    inputs.itemById("oz").value = o.get("z", "0")
+    r = cd.rotation or {}
+    inputs.itemById("rx").value = r.get("x", "0")
+    inputs.itemById("ry").value = r.get("y", "0")
+    inputs.itemById("rz").value = r.get("z", "0")
+    inputs.itemById("closed").value = cd.closed
+    inputs.itemById("deg").value = (cd.angle == "deg")
+    inputs.itemById("adaptive").value = cd.adaptive
+
+
+def on_preset_changed(inputs: adsk.core.CommandInputs, changed_input) -> bool:
+    """If the preset dropdown changed to a real preset, fill the fields.
+
+    Returns True if a preset was applied. Call from the command's inputChanged.
+    """
+    if changed_input.id != "preset":
+        return False
+    name = inputs.itemById("preset").selectedItem.name
+    if name == _CUSTOM:
+        return False
+    apply_curvedef(inputs, curvedef_for(name))
+    return True
 
 
 def read_inputs(inputs: adsk.core.CommandInputs) -> CurveDef:
@@ -88,18 +140,18 @@ def read_inputs(inputs: adsk.core.CommandInputs) -> CurveDef:
         exprs = {"r": ex, "phi": ey, "theta": ez}
 
     var = inputs.itemById("var").value.strip() or (
-        "a" if (mode == "explicit" and coord == "polar") else "t"
-    )
+        "a" if (mode == "explicit" and coord == "polar") else "t")
     return CurveDef(
         mode=mode, coord=coord, dim=dim, angle="deg" if deg else "rad",
         exprs=exprs, var=var,
         t_min=inputs.itemById("tmin").value, t_max=inputs.itemById("tmax").value,
         samples=inputs.itemById("samples").value,
-        origin={
-            "x": inputs.itemById("ox").value,
-            "y": inputs.itemById("oy").value,
-            "z": inputs.itemById("oz").value,
-        },
+        origin={"x": inputs.itemById("ox").value,
+                "y": inputs.itemById("oy").value,
+                "z": inputs.itemById("oz").value},
+        rotation={"x": inputs.itemById("rx").value,
+                  "y": inputs.itemById("ry").value,
+                  "z": inputs.itemById("rz").value},
         closed=inputs.itemById("closed").value,
         adaptive=inputs.itemById("adaptive").value,
     )
