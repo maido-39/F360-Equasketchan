@@ -1,0 +1,60 @@
+# Change Log
+
+Record here any requirement deltas found during the §24 research-refresh
+(SPEC_implementation.md) before/while implementing.
+
+## [unreleased]
+
+### §24 Research re-validation — 2026-06-18 (R-1..R-9)
+
+Host = the Windows Fusion machine itself (`C:\dev\fusion-eqcurve`). Findings are
+a mix of **empirical** (probed on this host) and **authoritative** (Autodesk /
+vendor docs). Items marked **DELTA** change an assumption in the spec.
+
+| # | Item | Result | Status |
+|---|---|---|---|
+| R-1 | Fusion bundled Python version (PC-3) | **3.14.0** (`python314.dll` in active build `441fa…`, Fusion `2703.1.20`). Autodesk moved 3.12 → 3.14 in 2026. | **DELTA — documented** |
+| R-2 | AddIns folder name (WIN-2) | `%APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns` **exists**; the `…\Autodesk Fusion\…` variant does **not**. | Resolved → use "Fusion 360" path |
+| R-3 | Custom Feature compute scope (PC-5, MS-2) | Still a **preview** API; dependency-driven recompute; base feature for new bodies; narrow reliable path unchanged. | Unchanged |
+| R-4 | Internal unit = cm (PC-4, ARC-3) | Unchanged; adapter already converts mm→cm at one boundary. | Unchanged |
+| R-5 | Custom params in Change/Parameters dialog (MS-2) | Confirmed: custom-feature input values are saved as custom parameters, visible/editable in the Parameters dialog. | Unchanged |
+| R-6 | `mcp` package / FastMCP import (bridge/mcp_server) | `from mcp.server.fastmcp import FastMCP` **still valid**; `mcp` latest 1.28.0 (pin `mcp>=1.2.0` fine). A standalone `fastmcp` v3.x now also exists (`from fastmcp import FastMCP`) — optional, not required. | Unchanged (note) |
+| R-7 | `claude mcp add` stdio-over-ssh syntax (WIN-4) | Pattern `claude mcp add NAME -- COMMAND ARGS` still current (stdio is the default transport; `--transport stdio` optional). | Unchanged |
+| R-8 | Autodesk official MCP/AI tooling (§20, §21) | **Autodesk released official Fusion MCP servers in 2026** (local "Fusion MCP" + remote "Fusion Data MCP"). They are **command/workflow-oriented**, not arbitrary-Python execution. | **DELTA — decision below** |
+| R-9 | VS Code ms-python debug attach (DEV-2) | `ms-python.python` auto-installed on first VS Code launch from Fusion; uncheck **Run on Startup** before debugging. Matches DEV-2. | Unchanged |
+
+### Decisions / actions from the deltas
+
+- **R-1 (Python 3.14):** No code change required. This *reinforces* PC-3 / ARC-2
+  (stdlib-only): the 2026 update breaks `.pyc`-shipped add-ins and several pip
+  packages (e.g. cryptography, google-auth) for users on 3.14, but our add-ins
+  ship `.py` source and import **stdlib only**, so they are unaffected. The core
+  imports cleanly under both system Python 3.12 and Fusion's 3.14. Spec PC-3 now
+  pinned to "3.14 as of 2026-06".
+- **R-8 (official Autodesk MCP):** **Keep the custom `FusionEqBridge`** for the
+  dev/test harness. The official servers do not expose the arbitrary-Python
+  `execute()` + `list_api()` introspection that the agent test loop (TEST-2,
+  TEST-4) depends on, and they carry their own auth/cloud surface. The custom
+  bridge remains the right tool for §20–21. Re-evaluate if Autodesk later exposes
+  a scripting/exec tool. (The official Fusion MCP could still be added *alongside*
+  later for command-level automation — out of scope now.)
+
+### Conformance fix (not a research delta)
+
+- `bridge/addin/FusionEqBridge/FusionEqBridge.manifest` had `runOnStartup: true`,
+  which violates **SEC-7** and **DEV-4** ("bridge runs only during dev sessions;
+  Run on Startup MUST be disabled"). Changed to `false`. The plugin add-in
+  (`EquationCurve`) was already `false`.
+
+### Environment verification (runbook §25 step 3) — 2026-06-18
+
+- OpenSSH Server (`sshd`): **Running**. `ssh.exe` present.
+- Fusion 360 installed and **running** (PID live), build `2703.1.20`.
+- Bundled Python **3.14.0**; system Python **3.12** (pytest target).
+- Bridge **live**: `GET /health` → `{"ok":true,"fusion":true}`; bearer token at
+  `%LOCALAPPDATA%\fusion-eqbridge\secret` (present). Bound to `127.0.0.1` (SEC-1 ok).
+- `execute` smoke test (read-only) returned Fusion version + active Design doc — the
+  full agent test loop (TEST-2) works end-to-end.
+- Core acceptance tests: **12 passed** via `pytest` on system Python (DEV-5, TEST-1a).
+- Not yet present: **git** (project is not a repo — version control recommended
+  before further edits).

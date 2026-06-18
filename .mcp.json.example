@@ -1,0 +1,15 @@
+{
+  "//": "Topology A: the MCP server runs on the remote WINDOWS host next to Fusion.",
+  "//2": "Claude Code launches it over SSH; stdio is piped through the SSH channel.",
+  "//3": "Replace USER@WINHOST and the remote project path. Keep the bridge bound to 127.0.0.1 on the host.",
+  "mcpServers": {
+    "fusion-eqcurve": {
+      "command": "ssh",
+      "args": [
+        "USER@WINHOST",
+        "py -m bridge.mcp_server"
+      ],
+      "env": {}
+    }
+  }
+}

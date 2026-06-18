@@ -1,0 +1,24 @@
+[project]
+name = "fusion-eqcurve"
+version = "0.1.0"
+description = "Equation-driven curve plugin for Fusion 360 + audited localhost bridge for agent-driven testing"
+requires-python = ">=3.10"
+# Core (eqcurve.core) has NO runtime deps and is pytest-testable without Fusion.
+# These deps are only for the MCP server (runs outside Fusion).
+dependencies = []
+
+[project.optional-dependencies]
+server = ["mcp>=1.2.0", "httpx>=0.27"]
+dev = ["pytest>=8.0", "ruff>=0.6", "httpx>=0.27"]
+
+[project.scripts]
+fusion-eqcurve-mcp = "bridge.mcp_server.server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# integration_harness.py is excluded (needs a live Fusion); only test_*.py run
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100

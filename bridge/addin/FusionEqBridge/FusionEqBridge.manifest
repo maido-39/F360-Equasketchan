@@ -1,0 +1,11 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "addin",
+  "id": "fusion-eqbridge",
+  "author": "you",
+  "description": { "": "Localhost bridge for agent-driven testing (127.0.0.1 + token)." },
+  "version": "0.1.0",
+  "runOnStartup": false,
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}

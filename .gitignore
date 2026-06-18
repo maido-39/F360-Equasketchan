@@ -1,0 +1,33 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+.venv/
+venv/
+
+# --- Local / machine-specific config ---
+# Real MCP config may contain USER@WINHOST; commit only the .example.
+.mcp.json
+
+# --- Secrets (the bridge token lives under %LOCALAPPDATA%, never the repo;
+#     these patterns are defense in depth — see SEC-2) ---
+*.secret
+secret
+.env
+
+# --- Build artifacts ---
+fusion-eqcurve.zip
+
+# --- Editors / IDE ---
+.vscode/
+.idea/
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
