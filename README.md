@@ -145,10 +145,12 @@ read `result`/`stdout` → `screenshot` → iterate.
   command (PC-8). See `eqcurve/addin/EquationCurve/custom_feature.py`.
 - **MS-3 — done:** preset catalog (11 curves), real-time preview (transient
   custom graphics), origin + Euler rotation transform, definition import/export
-  (JSON), readable error messages, circular-reference guard.
+  (JSON), readable error messages, circular-reference guard, and chord-deviation
+  fit tolerance for adaptive sampling (FR-10.3).
 - **Future ([S]/[C], out of the current plan):** per-component mixed laws
-  (FR-1.3), promote-local-constant-to-parameter (FR-8.4), chord/deviation fit
-  tolerance (FR-10.3), scale/mirror + snap (FR-9.4/9.5), `z=f(x,y)` surface module.
+  (FR-1.3), points-per-unit density (FR-3.4), promote-local-constant-to-parameter
+  (FR-8.4), scale/mirror + snap (FR-9.4/9.5), spline degree/fit method (FR-10.5),
+  `z=f(x,y)` surface module (FR-1.5).
 
 ### Units & limitations
 

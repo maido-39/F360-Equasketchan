@@ -217,6 +217,18 @@ def sample_runs(cd: CurveDef, params: Optional[Mapping[str, float]] = None) -> L
     return runs
 
 
+def _chord_deviation(a: Point, m: Point, b: Point) -> float:
+    """Perpendicular distance from m to the chord a->b (3D)."""
+    ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    am = (m[0] - a[0], m[1] - a[1], m[2] - a[2])
+    ab2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
+    if ab2 == 0.0:
+        return math.sqrt(am[0] ** 2 + am[1] ** 2 + am[2] ** 2)
+    t = (am[0] * ab[0] + am[1] * ab[1] + am[2] * ab[2]) / ab2
+    proj = (a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2])
+    return math.sqrt((m[0] - proj[0]) ** 2 + (m[1] - proj[1]) ** 2 + (m[2] - proj[2]) ** 2)
+
+
 def _turn_angle(a: Point, m: Point, b: Point) -> float:
     """Turning angle (radians) of the polyline a->m->b at m."""
     v1 = (m[0] - a[0], m[1] - a[1], m[2] - a[2])
@@ -244,6 +256,7 @@ def adaptive_sample_runs(
     ev, t0, t1, origin, rot, keys = _domain(cd, params)
     seed = max(2, min(seed, cd.samples))
     tol = math.radians(angle_tol_deg)
+    dev_tol = cd.tolerance if cd.tolerance and cd.tolerance > 0 else None  # mm (FR-10.3)
 
     def pt(u: float) -> Optional[Point]:
         return _eval_one(cd, params, ev, keys, u, origin, rot)
@@ -260,7 +273,10 @@ def adaptive_sample_runs(
             # straddles a singularity: localize it (bounded by depth)
             bisect(ta, tm, depth + 1)
             bisect(tm, tb, depth + 1)
-        elif _turn_angle(pa, pm, pb) > tol:
+            return
+        too_bent = _turn_angle(pa, pm, pb) > tol
+        too_far = dev_tol is not None and _chord_deviation(pa, pm, pb) > dev_tol
+        if too_bent or too_far:
             bisect(ta, tm, depth + 1)
             bisect(tm, tb, depth + 1)
 

@@ -8,7 +8,7 @@ import math
 import pytest
 
 from eqcurve.core import (
-    CurveDef, sample, sample_runs, preset_names, curvedef_for,
+    CurveDef, sample, sample_runs, adaptive_sample_runs, preset_names, curvedef_for,
     describe, ExpressionError, SamplingError,
 )
 
@@ -75,3 +75,23 @@ def test_describe_unknown_function():
 def test_describe_empty_domain():
     msg = describe(SamplingError("t_min == t_max (empty domain)"))
     assert "empty domain" in msg.lower()
+
+
+# ---- FR-10.3: adaptive chord-deviation tolerance --------------------------
+
+def test_adaptive_deviation_tolerance_adds_points_and_is_deterministic():
+    base = dict(mode="explicit", coord="cartesian", dim=2,
+                exprs={"y": "x*x"}, var="x", t_min="0", t_max="4", samples=200, adaptive=True)
+    coarse = CurveDef(tolerance=0.0, **base)       # angle criterion only
+    fine = CurveDef(tolerance=0.0005, **base)      # add tight chord-deviation
+    n_coarse = sum(len(r) for r in adaptive_sample_runs(coarse))
+    n_fine = sum(len(r) for r in adaptive_sample_runs(fine))
+    assert n_fine >= n_coarse
+    assert adaptive_sample_runs(fine) == adaptive_sample_runs(fine)  # deterministic
+
+
+def test_tolerance_roundtrips_and_old_json_defaults():
+    cd = CurveDef(exprs={"x": "t", "y": "t"}, tolerance=0.01)
+    assert CurveDef.from_json(cd.to_json()).tolerance == 0.01
+    old = '{"mode":"parametric","coord":"cartesian","dim":2,"exprs":{"x":"t","y":"t"}}'
+    assert CurveDef.from_json(old).tolerance == 0.0

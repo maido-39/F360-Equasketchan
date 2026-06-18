@@ -39,6 +39,7 @@ class CurveDef:
     samples: int = 200                # number of points (deterministic)
     closed: bool = False              # force-close start==end
     adaptive: bool = False            # deterministic curvature-adaptive sampling (FR-10.2)
+    tolerance: float = 0.0            # max chord deviation in mm for adaptive (0 = angle only, FR-10.3)
 
     # --- placement (applied after evaluation, in model units = mm) ---
     # Points are rotated about the local origin (Euler X->Y->Z, in `angle` unit),

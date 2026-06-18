@@ -78,6 +78,7 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None) -> None:
     inputs.addBoolValueInput("closed", "Closed", True, "", cd.closed)
     inputs.addBoolValueInput("deg", "Degrees", True, "", cd.angle == "deg")
     inputs.addBoolValueInput("adaptive", "Adaptive sampling", True, "", cd.adaptive)
+    inputs.addStringValueInput("tol", "Fit tolerance mm (0=off)", str(cd.tolerance))
 
 
 def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
@@ -103,6 +104,7 @@ def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
     inputs.itemById("closed").value = cd.closed
     inputs.itemById("deg").value = (cd.angle == "deg")
     inputs.itemById("adaptive").value = cd.adaptive
+    inputs.itemById("tol").value = str(cd.tolerance)
 
 
 def on_preset_changed(inputs: adsk.core.CommandInputs, changed_input) -> bool:
@@ -154,4 +156,12 @@ def read_inputs(inputs: adsk.core.CommandInputs) -> CurveDef:
                   "z": inputs.itemById("rz").value},
         closed=inputs.itemById("closed").value,
         adaptive=inputs.itemById("adaptive").value,
+        tolerance=_to_float(inputs.itemById("tol").value),
     )
+
+
+def _to_float(text) -> float:
+    try:
+        return float(str(text).strip())
+    except (TypeError, ValueError):
+        return 0.0
