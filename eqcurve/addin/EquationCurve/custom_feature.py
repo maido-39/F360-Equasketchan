@@ -53,6 +53,14 @@ def _clear_splines(sketch):
         sps.item(i).deleteMe()
 
 
+def _param_names():
+    try:
+        ups = _design().userParameters
+        return [ups.item(i).name for i in range(ups.count)]
+    except Exception:
+        return []
+
+
 def _find_eqcurve_feature():
     sels = _ui.activeSelections
     for i in range(sels.count):
@@ -135,7 +143,7 @@ class _CreateCreated(adsk.core.CommandCreatedEventHandler):
     def notify(self, args):
         try:
             cmd = args.command
-            dialog.build_inputs(cmd.commandInputs, None)
+            dialog.build_inputs(cmd.commandInputs, None, _param_names())
             ic = _PresetChanged()
             cmd.inputChanged.add(ic)
             _handlers.append(ic)
@@ -155,9 +163,9 @@ class _CreateCreated(adsk.core.CommandCreatedEventHandler):
 class _PresetChanged(adsk.core.InputChangedEventHandler):
     def notify(self, args):
         try:
-            dialog.on_preset_changed(args.inputs, args.input)
+            dialog.on_input_changed(args.inputs, args.input)
         except Exception:
-            pass  # preset fill is best-effort
+            pass  # preset/insert helpers are best-effort
 
 
 class _PreviewHandler(adsk.core.CommandEventHandler):
@@ -248,7 +256,7 @@ class _EditCreated(adsk.core.CommandCreatedEventHandler):
                     "hint", "", "Select the equation-curve feature, then Edit.", 2, True)
                 return
             cd = CurveDef.from_json(cf.attributes.itemByName(_GRP, ATTR_DEF).value)
-            dialog.build_inputs(cmd.commandInputs, cd)
+            dialog.build_inputs(cmd.commandInputs, cd, _param_names())
             ic = _PresetChanged()
             cmd.inputChanged.add(ic)
             _handlers.append(ic)

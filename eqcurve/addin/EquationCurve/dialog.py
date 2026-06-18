@@ -23,6 +23,35 @@ _DEFAULT = CurveDef(
 _MODES = ("parametric", "explicit")
 _COORDS = ("cartesian", "polar", "cylindrical", "spherical")
 
+_INSERT_HINT = "(insert parameter…)"
+# expression-bearing fields; the last one edited receives an inserted parameter
+_EXPR_FIELDS = ("ex", "ey", "ez", "tmin", "tmax", "ox", "oy", "oz", "rx", "ry", "rz")
+_last_field = {"id": "ey"}
+
+# Tutorial / reference text (Inventor Equation-Curve style). FR-12 tutorial+intuitive.
+_HELP_HOWTO = (
+    "Write each component as a formula in the independent variable "
+    "<b>t</b> (parametric) or <b>x</b>/<b>a</b> (explicit). Reference any model "
+    "parameter by its name, e.g. <b>D3*sin(t)</b>. Pick a <b>Preset</b> to "
+    "autofill a worked example, or use <b>Insert parameter</b> to drop a "
+    "parameter name into the last-edited field. Angles follow the Degrees "
+    "toggle. t&nbsp;min/max may themselves be formulas (e.g. <b>2*pi*N</b>)."
+)
+_HELP_FUNCS = (
+    "<b>Trig</b>: sin cos tan cot sec csc · asin acos atan atan2<br/>"
+    "<b>Hyperbolic</b>: sinh cosh tanh · asinh acosh atanh<br/>"
+    "<b>Exp/Log</b>: exp ln log log2 log10 sqrt cbrt pow<br/>"
+    "<b>Misc</b>: abs floor ceil round sign min max hypot lerp mod<br/>"
+    "<b>Constants</b>: pi e tau phi &nbsp;·&nbsp; <b>Operators</b>: + - * / ^ ( )"
+)
+_HELP_EXAMPLES = (
+    "<b>Sine</b> (explicit cart.): y = D3*sin(D4*x)<br/>"
+    "<b>Cardioid</b> (explicit polar): r = 10*(1+cos(a))<br/>"
+    "<b>Helix</b> (param. cylindrical): r=10, theta=t, z=2*t<br/>"
+    "<b>Catenary</b> (hyperbolic): y = 5*cosh(x/5)<br/>"
+    "<b>Spiral spring</b>: r=R0+k*t, theta=t, z=pitch*t"
+)
+
 
 def _exprs_to_fields(cd: CurveDef):
     e = cd.exprs or {}
@@ -44,13 +73,21 @@ def _select(dropdown, name):
         it.isSelected = (it.name == name)
 
 
-def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None) -> None:
+def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
+                 param_names=None) -> None:
     cd = cd or _DEFAULT
+    _last_field["id"] = "ey"
 
     pin = inputs.addDropDownCommandInput("preset", "Preset", _TEXTLIST)
     pin.listItems.add(_CUSTOM, True)
     for name in preset_names():
         pin.listItems.add(name, False)
+
+    # parameter suggestion / autofill: insert an existing model parameter name
+    ins = inputs.addDropDownCommandInput("param_insert", "Insert parameter", _TEXTLIST)
+    ins.listItems.add(_INSERT_HINT, True)
+    for nm in (param_names or []):
+        ins.listItems.add(nm, False)
 
     mode_in = inputs.addDropDownCommandInput("mode", "Mode", _TEXTLIST)
     for name in _MODES:
@@ -80,6 +117,14 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None) -> None:
     inputs.addBoolValueInput("adaptive", "Adaptive sampling", True, "", cd.adaptive)
     inputs.addStringValueInput("tol", "Fit tolerance mm (0=off)", str(cd.tolerance))
 
+    # collapsible tutorial / reference (FR-12.4/12.5 — examples + function list)
+    grp = inputs.addGroupCommandInput("help", "Help & examples")
+    grp.isExpanded = False
+    h = grp.children
+    h.addTextBoxCommandInput("help_howto", "How to", _HELP_HOWTO, 6, True)
+    h.addTextBoxCommandInput("help_funcs", "Functions", _HELP_FUNCS, 5, True)
+    h.addTextBoxCommandInput("help_examples", "Examples", _HELP_EXAMPLES, 5, True)
+
 
 def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
     """Overwrite already-created inputs from a CurveDef (e.g. a chosen preset)."""
@@ -107,18 +152,30 @@ def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
     inputs.itemById("tol").value = str(cd.tolerance)
 
 
-def on_preset_changed(inputs: adsk.core.CommandInputs, changed_input) -> bool:
-    """If the preset dropdown changed to a real preset, fill the fields.
+def on_input_changed(inputs: adsk.core.CommandInputs, changed_input) -> None:
+    """Handle the dialog's live interactions (call from inputChanged):
 
-    Returns True if a preset was applied. Call from the command's inputChanged.
+    * remember the last-edited expression field (insert target),
+    * apply a chosen Preset, and
+    * insert a chosen parameter name into the last-edited field (autofill).
     """
-    if changed_input.id != "preset":
-        return False
-    name = inputs.itemById("preset").selectedItem.name
-    if name == _CUSTOM:
-        return False
-    apply_curvedef(inputs, curvedef_for(name))
-    return True
+    cid = changed_input.id
+    if cid in _EXPR_FIELDS:
+        _last_field["id"] = cid
+        return
+    if cid == "preset":
+        name = inputs.itemById("preset").selectedItem.name
+        if name != _CUSTOM:
+            apply_curvedef(inputs, curvedef_for(name))
+        return
+    if cid == "param_insert":
+        sel = inputs.itemById("param_insert").selectedItem
+        if sel and sel.name != _INSERT_HINT:
+            fld = inputs.itemById(_last_field["id"])
+            if fld is not None:
+                cur = fld.value or ""
+                fld.value = (cur + sel.name) if (not cur or cur[-1:] in " (+-*/^,") else (cur + "*" + sel.name)
+            inputs.itemById("param_insert").listItems.item(0).isSelected = True  # reset
 
 
 def read_inputs(inputs: adsk.core.CommandInputs) -> CurveDef:

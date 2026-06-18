@@ -143,10 +143,17 @@ read `result`/`stdout` → `screenshot` → iterate.
   live: `AMP` 10→40 mm rescales the curve), built inside a base feature for the
   reliable compute path, double-click **Edit**, and a **Regenerate** fallback
   command (PC-8). See `eqcurve/addin/EquationCurve/custom_feature.py`.
-- **MS-3 — done:** preset catalog (11 curves), real-time preview (transient
-  custom graphics), origin + Euler rotation transform, definition import/export
-  (JSON), readable error messages, circular-reference guard, and chord-deviation
-  fit tolerance for adaptive sampling (FR-10.3).
+- **MS-3 — done:** preset catalog (14 curves, incl. **cycloidal gear, involute
+  gear, conical spiral spring**), real-time preview (transient custom graphics),
+  origin + Euler rotation transform, definition import/export (JSON), readable
+  error messages, circular-reference guard, chord-deviation fit tolerance
+  (FR-10.3), and a tutorial/Help-&-examples panel with a **parameter-insert
+  (autofill/suggestion)** dropdown and a function reference (Inventor-style).
+- **Verified end-to-end (live):** all coord systems + the full function library
+  build real curves; the three deliverables build correctly; editing a parameter
+  in the **Parameters/Modify panel auto-recomputes** the curve (no manual
+  Regenerate needed); a performance guard caps spline fit points so high counts
+  can't freeze Fusion (FR-13.4).
 - **Future ([S]/[C], out of the current plan):** per-component mixed laws
   (FR-1.3), points-per-unit density (FR-3.4), promote-local-constant-to-parameter
   (FR-8.4), scale/mirror + snap (FR-9.4/9.5), spline degree/fit method (FR-10.5),

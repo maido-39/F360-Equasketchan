@@ -129,5 +129,27 @@ errors.py (readable messages); dialog preset picker + rotation fields; preview v
 transient CustomGraphics; Import/Export commands; circular-reference guard.
 
 Deferred (spec [S]/[C], not in the approved plan): FR-1.3 per-component laws,
-FR-8.4 promote-constant-to-param, FR-10.3 fit tolerance, FR-9.4/9.5 scale/mirror/
-snap, FR-1.5 surface module.
+FR-8.4 promote-constant-to-param, FR-9.4/9.5 scale/mirror/snap, FR-1.5 surface
+module. (FR-10.3 fit tolerance has since been implemented.)
+
+### Modeling validation + UX pass — 2026-06-19
+
+Built and verified real modeling cases live (small, split calls per PC-9 after a
+single oversized call — an 800-pt closed epicycloid — froze Fusion ~10 min):
+- **Deliverables**: conical spiral spring (cylindrical r=R0+k*t, theta=t, z=pitch*t),
+  involute gear flank, epicycloid cycloidal gear profile — all build correctly and
+  are added to the preset catalog (14 presets).
+- **Modify-panel reactivity (FR-8.2)**: editing a user parameter's expression (what
+  the Parameters dialog does) **auto-recomputes** the curve with NO explicit
+  computeAll — confirmed live (R0 5→20 mm rescaled the spring).
+- **Phase coverage**: every coord system, explicit+parametric, trig/hyperbolic/
+  inverse-hyperbolic/exp/log/atan2/abs/floor, degrees, tan-singularity (3 splines),
+  rotation+origin — all build.
+- **FR-13.4 performance guard**: adapter caps fit points per spline at 300 via
+  deterministic core.decimate(); samples=1000 closed now builds in ~6 s.
+- **Segmentation fix**: runs split on parameter speed |dP/dt|, not raw distance, so
+  adaptive sampling no longer fragments a smooth curve (sin(5x): 10→1 splines).
+- **UI (Inventor-style)**: Help & examples panel (how-to, function reference,
+  worked examples), preset autofill, and a parameter-insert (suggestion/autofill)
+  dropdown. Edit pre-fills the prior definition (lossless). Dialog logic unit-tested
+  with a mocked CommandInputs (no Fusion). 38 pytest green; integration harness green.
