@@ -8,8 +8,8 @@ import math
 import pytest
 
 from eqcurve.core import (
-    CurveDef, sample, sample_runs, adaptive_sample_runs, preset_names, curvedef_for,
-    describe, ExpressionError, SamplingError,
+    CurveDef, sample, sample_runs, adaptive_sample_runs, decimate,
+    preset_names, curvedef_for, describe, ExpressionError, SamplingError,
 )
 
 
@@ -46,12 +46,25 @@ def test_rotation_roundtrips_through_json():
 
 def test_all_presets_sample_cleanly():
     names = preset_names()
-    assert len(names) == 11
+    assert len(names) == 14
+    for nm in ("Cycloidal gear profile", "Involute gear flank", "Conical spiral spring"):
+        assert nm in names
     for name in names:
         cd = curvedef_for(name)
         cd.validate()
         runs = sample_runs(cd)            # must not raise
         assert sum(len(r) for r in runs) >= 2, name
+
+
+# ---- M6: performance guard (FR-13.4) --------------------------------------
+
+def test_decimate_caps_points_and_keeps_endpoints():
+    run = [(float(i), float(i * i), 0.0) for i in range(1000)]
+    out = decimate(run, 300)
+    assert len(out) == 300
+    assert out[0] == run[0] and out[-1] == run[-1]   # endpoints preserved
+    assert decimate(run, 0) is run                   # disabled -> unchanged
+    assert decimate(run[:50], 300) == run[:50]       # under cap -> unchanged
 
 
 def test_preset_cardioid_is_known_shape():

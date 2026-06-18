@@ -51,6 +51,26 @@ def test_adaptive_is_deterministic():
     assert a == b  # same input -> byte-identical points (NFR-4)
 
 
+def test_adaptive_smooth_curve_not_fragmented():
+    # A smooth curve must stay ONE run under adaptive sampling — the uneven
+    # point spacing must not be mistaken for discontinuities.
+    cd = CurveDef(
+        mode="explicit", coord="cartesian", dim=2,
+        exprs={"y": "sin(5*x)"}, var="x", t_min="0", t_max="2*pi",
+        samples=200, adaptive=True, tolerance=0.05,
+    )
+    assert len(adaptive_sample_runs(cd)) == 1
+
+
+def test_adaptive_tan_still_segments():
+    cd = CurveDef(
+        mode="explicit", coord="cartesian", dim=2,
+        exprs={"y": "tan(x)"}, var="x", t_min="-pi", t_max="pi",
+        samples=200, adaptive=True,
+    )
+    assert len(adaptive_sample_runs(cd)) >= 2
+
+
 def test_adaptive_densifies_high_curvature():
     line = CurveDef(
         mode="parametric", coord="cartesian", dim=2,

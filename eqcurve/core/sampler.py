@@ -137,40 +137,51 @@ def _eval_one(
     return (x + origin[0], y + origin[1], z + origin[2])
 
 
-def _segment(raw: List[Optional[Point]], gap_factor: float = _GAP_FACTOR) -> List[Run]:
-    """Split a raw point sequence into runs at None gaps and at large jumps."""
-    runs: List[Run] = []
-    cur: Run = []
-    for p in raw:
+def _segment(samples, gap_factor: float = _GAP_FACTOR) -> List[Run]:
+    """Split (t, point|None) samples into runs at singularities and jumps.
+
+    A new run starts at every None (domain singularity) and at every spike in
+    *parameter speed* |dP/dt| — a true discontinuity (e.g. a tan pole with finite
+    but huge neighbours) makes the curve travel a long way over a tiny dt. Using
+    speed instead of raw distance means adaptive sampling's intentionally uneven
+    point spacing is NOT mistaken for a discontinuity.
+    """
+    runs = []
+    cur = []
+    for t, p in samples:
         if p is None:
             if cur:
                 runs.append(cur)
                 cur = []
         else:
-            cur.append(p)
+            cur.append((t, p))
     if cur:
         runs.append(cur)
 
-    out: List[Run] = []
+    out = []
     for run in runs:
-        out.extend(_split_on_jumps(run, gap_factor))
-    return [r for r in out if len(r) >= 2]
+        out.extend(_split_on_speed(run, gap_factor))
+    return [[p for _, p in r] for r in out if len(r) >= 2]
 
 
-def _split_on_jumps(run: Run, gap_factor: float) -> List[Run]:
+def _split_on_speed(run, gap_factor: float):
     if len(run) < 3:
         return [run]
-    dists = [_dist(run[i], run[i + 1]) for i in range(len(run) - 1)]
-    sd = sorted(dists)
+    speeds = []
+    for i in range(len(run) - 1):
+        (ta, pa), (tb, pb) = run[i], run[i + 1]
+        dt = abs(tb - ta)
+        speeds.append(_dist(pa, pb) / dt if dt > 0 else _dist(pa, pb))
+    sd = sorted(speeds)
     n = len(sd)
     median = sd[n // 2] if n % 2 else 0.5 * (sd[n // 2 - 1] + sd[n // 2])
     if median <= 0:
         return [run]
     thresh = gap_factor * median
-    segs: List[Run] = []
-    cur: Run = [run[0]]
+    segs = []
+    cur = [run[0]]
     for i in range(len(run) - 1):
-        if dists[i] > thresh:
+        if speeds[i] > thresh:
             segs.append(cur)
             cur = [run[i + 1]]
         else:
@@ -207,10 +218,8 @@ def sample_runs(cd: CurveDef, params: Optional[Mapping[str, float]] = None) -> L
     params = dict(params or {})
     ev, t0, t1, origin, rot, keys = _domain(cd, params)
     n = cd.samples
-    raw = [
-        _eval_one(cd, params, ev, keys, t0 + (t1 - t0) * (i / (n - 1)), origin, rot)
-        for i in range(n)
-    ]
+    tvals = [t0 + (t1 - t0) * (i / (n - 1)) for i in range(n)]
+    raw = [(u, _eval_one(cd, params, ev, keys, u, origin, rot)) for u in tvals]
     runs = _segment(raw)
     if not runs:
         raise SamplingError("fewer than 2 finite points produced")
@@ -284,7 +293,7 @@ def adaptive_sample_runs(
     for i in range(len(seeds) - 1):
         bisect(seeds[i], seeds[i + 1], 0)
 
-    raw = [pt(u) for u in sorted(ts)]
+    raw = [(u, pt(u)) for u in sorted(ts)]
     runs = _segment(raw)
     if not runs:
         raise SamplingError("fewer than 2 finite points produced")
@@ -309,6 +318,21 @@ def sample(cd: CurveDef, params: Optional[Mapping[str, float]] = None) -> List[P
     if cd.closed and pts[0] != pts[-1]:
         pts.append(pts[0])
     return pts
+
+
+def decimate(run: Run, cap: int) -> Run:
+    """Deterministically reduce a run to at most `cap` evenly-spaced points.
+
+    Keeps the first and last point. Used by the adapter to bound the number of
+    fit points handed to Fusion's spline solver — the solver's cost is strongly
+    superlinear, so an uncapped high count (e.g. 800 closed) can freeze Fusion
+    for minutes (FR-13.4 performance guard). Sampling stays fine; only the fit
+    is coarsened.
+    """
+    n = len(run)
+    if not cap or cap < 2 or n <= cap:
+        return run
+    return [run[round(i * (n - 1) / (cap - 1))] for i in range(cap)]
 
 
 def is_effectively_closed(pts: List[Point], tol: float = 1e-6) -> bool:

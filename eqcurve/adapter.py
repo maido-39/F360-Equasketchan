@@ -11,12 +11,17 @@ from typing import List, Mapping, Optional, Tuple
 import adsk.core
 import adsk.fusion
 
-from .core import CurveDef, runs_for, is_effectively_closed
+from .core import CurveDef, runs_for, is_effectively_closed, decimate
 
 _ATTR_GROUP = "eqcurve"
 _ATTR_DEF = "curvedef_json"
 _ATTR_MARK = "is_eqcurve"
 MM_TO_CM = 0.1  # Fusion internal unit is cm
+# Max fit points per spline handed to Fusion. The solver's cost is strongly
+# superlinear for closed/cusped curves (~0.26s @100, 6s @300, 15s @400, minutes
+# @800), so cap the fit to keep create/recompute responsive (FR-13.4). Sampling
+# is unaffected — only the spline fit is coarsened.
+MAX_SPLINE_POINTS = 300
 
 
 # ---- units (FR-8.5) -------------------------------------------------------
@@ -91,6 +96,7 @@ def read_design_params_typed(design: "adsk.fusion.Design") -> dict:
 # ---- geometry -------------------------------------------------------------
 
 def _add_spline(sketch, run, cd: CurveDef, single_run: bool):
+    run = decimate(run, MAX_SPLINE_POINTS)  # FR-13.4 performance guard
     coll = adsk.core.ObjectCollection.create()
     for x, y, z in run:
         coll.add(adsk.core.Point3D.create(x * MM_TO_CM, y * MM_TO_CM, z * MM_TO_CM))
