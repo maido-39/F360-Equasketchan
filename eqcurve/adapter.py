@@ -95,11 +95,13 @@ def read_design_params_typed(design: "adsk.fusion.Design") -> dict:
 
 # ---- geometry -------------------------------------------------------------
 
-def _add_spline(sketch, run, cd: CurveDef, single_run: bool):
+def _add_spline(sketch, run, cd: CurveDef, single_run: bool, off_cm=(0.0, 0.0, 0.0)):
     run = decimate(run, MAX_SPLINE_POINTS)  # FR-13.4 performance guard
+    ox, oy, oz = off_cm
     coll = adsk.core.ObjectCollection.create()
     for x, y, z in run:
-        coll.add(adsk.core.Point3D.create(x * MM_TO_CM, y * MM_TO_CM, z * MM_TO_CM))
+        coll.add(adsk.core.Point3D.create(
+            x * MM_TO_CM + ox, y * MM_TO_CM + oy, z * MM_TO_CM + oz))
     spline = sketch.sketchCurves.sketchFittedSplines.add(coll)
     if single_run:
         try:
@@ -117,12 +119,17 @@ def build_curve_runs(
     sketch: "adsk.fusion.Sketch",
     cd: CurveDef,
     params: Optional[Mapping[str, float]] = None,
+    off_cm=(0.0, 0.0, 0.0),
 ) -> List["adsk.fusion.SketchFittedSpline"]:
     """Evaluate `cd` and create one fitted spline per run (segmented at
-    singularities/jumps, so e.g. tan never bridges its asymptotes)."""
+    singularities/jumps, so e.g. tan never bridges its asymptotes).
+
+    `off_cm` is an extra placement offset in SKETCH space (cm) — used to anchor
+    the curve at a user-selected origin point so it follows that point when moved.
+    """
     runs = runs_for(cd, params)
     single = len(runs) == 1
-    return [_add_spline(sketch, run, cd, single) for run in runs]
+    return [_add_spline(sketch, run, cd, single, off_cm) for run in runs]
 
 
 def build_curve(

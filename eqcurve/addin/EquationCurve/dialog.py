@@ -112,6 +112,21 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
     inputs.addStringValueInput("rx", "Rotation X", r.get("x", "0"))
     inputs.addStringValueInput("ry", "Rotation Y", r.get("y", "0"))
     inputs.addStringValueInput("rz", "Rotation Z", r.get("z", "0"))
+
+    # interactive placement: sketch plane + origin point (optional). The curve is
+    # anchored to the picked point, so constraining/moving it moves the curve.
+    plane_sel = inputs.addSelectionInput("plane", "Sketch plane",
+                                         "Construction plane or planar face (optional)")
+    plane_sel.addSelectionFilter("ConstructionPlanes")
+    plane_sel.addSelectionFilter("PlanarFaces")
+    plane_sel.setSelectionLimits(0, 1)
+    pt_sel = inputs.addSelectionInput("origin_pt", "Origin point",
+                                      "Sketch/construction point or vertex (optional)")
+    pt_sel.addSelectionFilter("SketchPoints")
+    pt_sel.addSelectionFilter("ConstructionPoints")
+    pt_sel.addSelectionFilter("Vertices")
+    pt_sel.setSelectionLimits(0, 1)
+
     inputs.addBoolValueInput("closed", "Closed", True, "", cd.closed)
     inputs.addBoolValueInput("deg", "Degrees", True, "", cd.angle == "deg")
     inputs.addBoolValueInput("adaptive", "Adaptive sampling", True, "", cd.adaptive)

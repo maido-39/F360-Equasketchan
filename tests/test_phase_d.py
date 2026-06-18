@@ -47,7 +47,7 @@ def test_rotation_roundtrips_through_json():
 def test_all_presets_sample_cleanly():
     names = preset_names()
     assert len(names) == 14
-    for nm in ("Cycloidal gear profile", "Involute gear flank", "Conical spiral spring"):
+    for nm in ("Cycloidal gear", "Involute gear", "Conical spiral spring"):
         assert nm in names
     for name in names:
         cd = curvedef_for(name)

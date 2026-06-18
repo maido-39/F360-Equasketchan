@@ -50,19 +50,19 @@ _PRESETS: List[tuple] = [
     ("Spherical spiral", dict(
         mode="parametric", coord="spherical", dim=3,
         exprs={"r": "10", "phi": "t", "theta": "10*t"}, var="t", t_min="0", t_max="pi", samples=400)),
-    # --- deliverable showcases (parametric; reference example params if present) ---
-    ("Cycloidal gear profile", dict(
-        mode="parametric", coord="cartesian", dim=2,
-        exprs={"x": "(6*3 + 3)*cos(t) - 3*cos((6 + 1)*t)",
-               "y": "(6*3 + 3)*sin(t) - 3*sin((6 + 1)*t)"},
-        var="t", t_min="0", t_max="2*pi", samples=240, closed=True)),
-    ("Involute gear flank", dict(
-        mode="parametric", coord="cartesian", dim=2,
-        exprs={"x": "20*(cos(t) + t*sin(t))", "y": "20*(sin(t) - t*cos(t))"},
-        var="t", t_min="0", t_max="1.4*pi", samples=200)),
+    # --- deliverable showcases: closed gear profiles (extrudable) + a spring ---
+    # Gear-shaped radial tooth profiles (single-equation; extrude into a gear).
+    ("Cycloidal gear", dict(
+        mode="explicit", coord="polar", dim=2,
+        exprs={"r": "18 + 4*max(cos(11*a), 0)"},     # 11 rounded sprocket teeth
+        var="a", t_min="0", t_max="2*pi", samples=300, closed=True)),
+    ("Involute gear", dict(
+        mode="explicit", coord="polar", dim=2,
+        exprs={"r": "20 + 2.5*tanh(5*cos(16*a))"},   # 16 flat-topped spur teeth
+        var="a", t_min="0", t_max="2*pi", samples=300, closed=True)),
     ("Conical spiral spring", dict(
         mode="parametric", coord="cylindrical", dim=3,
-        exprs={"r": "5 + 1*t", "theta": "t", "z": "2*t"},
+        exprs={"r": "8 + 0.5*t", "theta": "t", "z": "0.8*t"},
         var="t", t_min="0", t_max="6*pi", samples=240)),
 ]
 

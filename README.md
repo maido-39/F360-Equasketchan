@@ -149,11 +149,17 @@ read `result`/`stdout` → `screenshot` → iterate.
   error messages, circular-reference guard, chord-deviation fit tolerance
   (FR-10.3), and a tutorial/Help-&-examples panel with a **parameter-insert
   (autofill/suggestion)** dropdown and a function reference (Inventor-style).
+- **Interactive placement:** pick a **sketch plane** (or planar face) to build on,
+  and an **origin point** (sketch/construction point or vertex) the curve is
+  anchored to — constrain or move that point and the curve **follows** it
+  (verified live). The generated sketch is fully equation-defined.
 - **Verified end-to-end (live):** all coord systems + the full function library
-  build real curves; the three deliverables build correctly; editing a parameter
-  in the **Parameters/Modify panel auto-recomputes** the curve (no manual
-  Regenerate needed); a performance guard caps spline fit points so high counts
-  can't freeze Fusion (FR-13.4).
+  build real curves; editing a parameter in the **Parameters/Modify panel
+  auto-recomputes** the curve (no manual Regenerate); a performance guard caps
+  spline fit points so high counts can't freeze Fusion (FR-13.4). The three
+  deliverables were **extruded/solidified into 3D** and visually reviewed:
+  an involute-style spur gear, a cycloidal/sprocket gear, and a conical spiral
+  spring (helix piped into a tapered spring).
 - **Future ([S]/[C], out of the current plan):** per-component mixed laws
   (FR-1.3), points-per-unit density (FR-3.4), promote-local-constant-to-parameter
   (FR-8.4), scale/mirror + snap (FR-9.4/9.5), spline degree/fit method (FR-10.5),

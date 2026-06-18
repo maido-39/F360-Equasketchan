@@ -80,6 +80,17 @@ class _Group:
         self.children = children
 
 
+class _Selection:
+    def __init__(self):
+        self.selectionCount = 0
+
+    def addSelectionFilter(self, _f):
+        pass
+
+    def setSelectionLimits(self, _a, _b=0):
+        pass
+
+
 class MockInputs:
     def __init__(self):
         self._by = {}
@@ -106,6 +117,10 @@ class MockInputs:
 
     def addGroupCommandInput(self, _id, _name):
         self._by[_id] = _Group(MockInputs())
+        return self._by[_id]
+
+    def addSelectionInput(self, _id, _name, _prompt):
+        self._by[_id] = _Selection()
         return self._by[_id]
 
     def itemById(self, _id):

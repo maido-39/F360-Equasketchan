@@ -31,6 +31,8 @@ _GRP = "eqcurve"
 ATTR_DEF = "curvedef_json"
 ATTR_BASE = "base_token"
 ATTR_SK = "sketch_token"
+ATTR_PT = "origin_pt_token"     # selected origin point (interactive, movable)
+ATTR_PLANE = "plane_token"      # selected sketch plane
 _ICON_FOLDER = os.path.dirname(__file__)
 _MM_TO_CM = 0.1
 
@@ -51,6 +53,40 @@ def _clear_splines(sketch):
     sps = sketch.sketchCurves.sketchFittedSplines
     for i in range(sps.count - 1, -1, -1):
         sps.item(i).deleteMe()
+
+
+def _point_world(ent):
+    """World-space Point3D of a sketch point / construction point / vertex."""
+    for attr in ("worldGeometry", "geometry"):
+        g = getattr(ent, attr, None)
+        if g is not None:
+            return g
+    return None
+
+
+def _off_cm(sketch, pt_ent):
+    """Placement offset (cm, in `sketch` space) from the chosen origin point.
+
+    The curve is anchored here, so moving/constraining the point moves the curve.
+    Returns (0,0,0) when no point is chosen (curve sits at the sketch origin)."""
+    if pt_ent is None:
+        return (0.0, 0.0, 0.0)
+    try:
+        w = _point_world(pt_ent)
+        sp = sketch.modelToSketchSpace(w)
+        return (sp.x, sp.y, 0.0)
+    except Exception:
+        return (0.0, 0.0, 0.0)
+
+
+def _resolve(design, token):
+    if not token:
+        return None
+    try:
+        ents = design.findEntityByToken(token)
+        return ents[0] if ents else None
+    except Exception:
+        return None
 
 
 def _param_names():
@@ -125,9 +161,21 @@ class _ComputeHandler(adsk.fusion.CustomFeatureEventHandler):
             base = design.findEntityByToken(ba.value)[0]
             sketch = design.findEntityByToken(sa.value)[0]
             params = adapter.read_design_params(design)
+            # the origin point comes from the custom-feature DEPENDENCY (Fusion
+            # keeps that reference valid across moves/edits, unlike a raw token).
+            pt_ent = None
+            try:
+                dep = cf.dependencies.itemById("dep_origin_pt")
+                pt_ent = dep.entity if dep else None
+            except Exception:
+                pt_ent = None
+            if pt_ent is None:
+                pa = cf.attributes.itemByName(_GRP, ATTR_PT)
+                pt_ent = _resolve(design, pa.value) if pa else None
+            off = _off_cm(sketch, pt_ent)
             base.startEdit()
             _clear_splines(sketch)
-            adapter.build_curve_runs(sketch, cd, params)
+            adapter.build_curve_runs(sketch, cd, params, off_cm=off)
             base.finishEdit()
         except Exception:
             try:
@@ -182,42 +230,68 @@ class _DestroyHandler(adsk.core.CommandEventHandler):
         _clear_preview()
 
 
+def _sel_entity(inputs, input_id):
+    si = inputs.itemById(input_id)
+    try:
+        if si is not None and si.selectionCount > 0:
+            return si.selection(0).entity
+    except Exception:
+        pass
+    return None
+
+
 class _CreateExecute(adsk.core.CommandEventHandler):
     def notify(self, args):
         _clear_preview()
         try:
-            cd = dialog.read_inputs(args.command.commandInputs)
-            create_feature(_design(), cd)
+            inputs = args.command.commandInputs
+            cd = dialog.read_inputs(inputs)
+            create_feature(_design(), cd,
+                           plane_ent=_sel_entity(inputs, "plane"),
+                           origin_pt_ent=_sel_entity(inputs, "origin_pt"))
         except Exception as exc:
             _ui.messageBox("Equation Curve: " + _describe(exc))
 
 
-def create_feature(design, cd, params=None):
+def create_feature(design, cd, params=None, plane_ent=None, origin_pt_ent=None):
     """Build the curve inside a base feature and wrap it in a Custom Feature.
 
+    `plane_ent`     : construction plane / planar face to sketch on (default XY).
+    `origin_pt_ent` : a sketch/construction point or vertex the curve is anchored
+                      to — moving or constraining it moves the curve (FR-9.2/9.5).
     Factored out so the integration harness can drive it without the dialog.
-    Returns the created CustomFeature.
     """
     _check_circular(design, cd)
     comp = design.activeComponent
     if params is None:
         params = adapter.read_design_params(design)
 
+    plane = plane_ent or comp.xYConstructionPlane
     base = comp.features.baseFeatures.add()
     base.startEdit()
-    sketch = comp.sketches.add(comp.xYConstructionPlane)
-    adapter.build_curve_runs(sketch, cd, params)
+    sketch = comp.sketches.add(plane)
+    adapter.build_curve_runs(sketch, cd, params, off_cm=_off_cm(sketch, origin_pt_ent))
     base.finishEdit()
     base_tok, sk_tok = base.entityToken, sketch.entityToken
 
     cfin = comp.features.customFeatures.createInput(_cdef)
     _mirror_params(design, cfin, cd)
+    for dep_id, ent in (("plane", plane_ent), ("origin_pt", origin_pt_ent)):
+        if ent is not None:
+            try:
+                cfin.addDependency("dep_" + dep_id, ent)
+            except Exception:
+                pass
     cfin.setStartAndEndFeatures(base, base)
     cf = comp.features.customFeatures.add(cfin)
 
     cf.attributes.add(_GRP, ATTR_DEF, cd.to_json())
     cf.attributes.add(_GRP, ATTR_BASE, base_tok)
     cf.attributes.add(_GRP, ATTR_SK, sk_tok)
+    if origin_pt_ent is not None:
+        cf.attributes.add(_GRP, ATTR_PT, origin_pt_ent.entityToken)
+    if plane_ent is not None:
+        cf.attributes.add(_GRP, ATTR_PLANE, plane_ent.entityToken)
     return cf
 
 
@@ -365,17 +439,29 @@ def register(app, ui):
     _button(CREATE_ID, "Equation Curve",
             "Create a parametric math-driven curve", _CreateCreated())
 
+    # A CustomFeatureDefinition can't be deleted and create() rejects a duplicate
+    # id, so cache the cdef on `sys` (survives module reloads). Re-attach a FRESH
+    # compute handler every register (removing the stale one) so edited compute
+    # logic actually takes effect on a dev Stop/Run — without this the first
+    # handler loaded in a Fusion session would be frozen in place.
     _key = "_eqcurve_cdef_" + CF_DEF_ID
+    _hkey = _key + "_handler"
     cached = getattr(sys, _key, None)
+    ch = _ComputeHandler()
     if cached is not None:
         _cdef = cached
+        old = getattr(sys, _hkey, None)
+        if old is not None:
+            try:
+                _cdef.customFeatureCompute.remove(old)
+            except Exception:
+                pass
     else:
         _cdef = adsk.fusion.CustomFeatureDefinition.create(
             CF_DEF_ID, "Equation Curve", _ICON_FOLDER)
-        ch = _ComputeHandler()
-        _cdef.customFeatureCompute.add(ch)
         setattr(sys, _key, _cdef)
-        setattr(sys, _key + "_handler", ch)
+    _cdef.customFeatureCompute.add(ch)
+    setattr(sys, _hkey, ch)
     _cdef.editCommandId = EDIT_ID
 
 
