@@ -50,23 +50,29 @@ def run(context):
     try:
         custom_feature.register(_app, _ui)
     except Exception:
+        # NEVER pop a modal here: run() executes on load/reload (incl. headless
+        # bridge reloads), and a blocking messageBox with no human to dismiss it
+        # wedges Fusion's main thread. Log richly instead (file + Text Commands).
         try:
             from eqcurve.core import eqlog
-            msg = eqlog.report("EquationCurve.run")
+            eqlog.report("EquationCurve.run")
         except Exception:
-            msg = traceback.format_exc()
-        if _ui:
-            _ui.messageBox("Equation Curve add-in failed to start:\n\n" + msg)
+            try:
+                _app.log("Equation Curve add-in failed to start:\n" + traceback.format_exc())
+            except Exception:
+                pass
 
 
 def stop(context):
     try:
         custom_feature.unregister()
     except Exception:
+        # log-only (see run): stop() also runs during automated reloads.
         try:
             from eqcurve.core import eqlog
             eqlog.report("EquationCurve.stop")
         except Exception:
-            pass
-        if _ui:
-            _ui.messageBox("Add-in stop failed:\n" + traceback.format_exc())
+            try:
+                _app.log("Add-in stop failed:\n" + traceback.format_exc())
+            except Exception:
+                pass

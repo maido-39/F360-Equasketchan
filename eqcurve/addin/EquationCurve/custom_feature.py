@@ -46,25 +46,43 @@ def _dump_inputs(inputs):
     return out
 
 
-def _fail(where, exc, **ctx):
-    """Log the full traceback + context to the log file, then show a friendly,
-    localized message (with the log path) — replaces bare messageBox(describe)."""
-    eqlog.report(where, **ctx)
+# Modals BLOCK Fusion's main thread until a human clicks. That is fine for an
+# interactive click, but fatal under automation (a bridge-driven reload that
+# errors would pop a modal nobody can dismiss, wedging the main thread and every
+# subsequent API call). So error reporting ALWAYS logs (non-blocking), and the
+# modal is gated by this switch — disable it before driving the add-in headlessly.
+_MODALS_ENABLED = True
+
+
+def set_modals(enabled: bool) -> None:
+    """Enable/disable blocking error modals (call set_modals(False) under automation)."""
+    global _MODALS_ENABLED
+    _MODALS_ENABLED = bool(enabled)
+
+
+def _modal(text: str) -> None:
+    """Show a blocking messageBox only when modals are enabled; never raise."""
+    if not (_MODALS_ENABLED and _ui):
+        return
     try:
-        _ui.messageBox("Equation Curve error:\n\n" + _describe(exc)
-                       + "\n\n[" + where + "]\n(full details logged to "
-                       + eqlog.log_path() + ")")
+        _ui.messageBox(text)
     except Exception:
         pass
+
+
+def _fail(where, exc, **ctx):
+    """Log the full traceback + context to the log file, then (interactively) show
+    a friendly, localized message with the log path. The log is always written."""
+    eqlog.report(where, **ctx)
+    _modal("Equation Curve error:\n\n" + _describe(exc)
+           + "\n\n[" + where + "]\n(full details logged to "
+           + eqlog.log_path() + ")")
 
 
 def _fail_tb(where, **ctx):
     """Like _fail but where the exception isn't bound (dialog-build failures)."""
     msg = eqlog.report(where, **ctx)
-    try:
-        _ui.messageBox("Equation Curve error in " + where + ":\n\n" + msg)
-    except Exception:
-        pass
+    _modal("Equation Curve error in " + where + ":\n\n" + msg)
 
 CF_DEF_ID = "eqcurve_customfeature"
 CREATE_ID = "eqcurve_create"
@@ -548,7 +566,7 @@ class _ExportCreated(adsk.core.CommandCreatedEventHandler):
         try:
             cf = _find_eqcurve_feature()
             if cf is None:
-                _ui.messageBox("Select an equation-curve feature to export.")
+                _modal("Select an equation-curve feature to export.")
                 return
             dlg = _ui.createFileDialog()
             dlg.title = "Export equation curve definition"

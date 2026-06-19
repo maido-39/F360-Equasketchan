@@ -159,8 +159,20 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._authed():
             return self._send(401, {"ok": False, "error": "unauthorized"})
-        if self.path == "/health":
-            return self._send(200, _dispatch({"kind": "health"}, timeout=10))
+        if self.path.startswith("/health"):
+            # Server liveness is answered on THIS http worker thread and does NOT
+            # touch the main thread, so /health stays responsive even when the
+            # main thread is wedged (e.g. a blocking modal). Diagnosing that case
+            # used to be impossible because /health round-tripped through
+            # fireCustomEvent, which itself blocks when the main thread is stuck.
+            # Add ?deep=1 to additionally probe the main thread (that probe may
+            # block if it is wedged, so the caller should set a client timeout).
+            resp = {"ok": True, "server": True}
+            if "deep=1" in self.path:
+                probe = _dispatch({"kind": "health"}, timeout=3)
+                resp["fusion"] = bool(probe.get("ok"))
+                resp["fusion_main"] = resp["fusion"]
+            return self._send(200, resp)
         if self.path.startswith("/screenshot"):
             return self._send(200, _dispatch({"kind": "screenshot"}, timeout=60))
         self._send(404, {"ok": False, "error": "not found"})
@@ -199,8 +211,12 @@ def run(context):
         _app.log(f"[FusionEqBridge] listening on http://{HOST}:{PORT}  "
                  f"(token at {_secret_path()})")
     except Exception:
-        if _ui:
-            _ui.messageBox("Bridge run failed:\n" + traceback.format_exc())
+        # log-only: a modal here would block the very main thread the bridge
+        # needs, and the bridge is often (re)started programmatically.
+        try:
+            _app.log("[FusionEqBridge] run failed:\n" + traceback.format_exc())
+        except Exception:
+            pass
 
 
 def stop(context):
@@ -211,5 +227,7 @@ def stop(context):
             _server = None
         _app.unregisterCustomEvent(EVENT_ID)
     except Exception:
-        if _ui:
-            _ui.messageBox("Bridge stop failed:\n" + traceback.format_exc())
+        try:
+            _app.log("[FusionEqBridge] stop failed:\n" + traceback.format_exc())
+        except Exception:
+            pass

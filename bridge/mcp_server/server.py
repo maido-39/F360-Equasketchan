@@ -69,9 +69,15 @@ mcp = FastMCP("fusion-eqcurve")
 
 @mcp.tool()
 def health() -> dict:
-    """Check that the Fusion bridge is reachable and Fusion is responding."""
+    """Check the bridge is reachable and whether Fusion's main thread responds.
+
+    Returns ``server`` (HTTP layer alive — answered without touching the main
+    thread) and ``fusion``/``fusion_main`` (main-thread probe). If ``server`` is
+    true but ``fusion`` is false, the bridge is up but Fusion's main thread is
+    wedged (e.g. a blocking modal) — restart the add-in rather than the server.
+    """
     return _guard(lambda: _result(
-        httpx.get(f"{HOST}/health", headers=_headers(), timeout=15)))
+        httpx.get(f"{HOST}/health?deep=1", headers=_headers(), timeout=15)))
 
 
 @mcp.tool()
