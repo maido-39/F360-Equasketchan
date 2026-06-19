@@ -580,15 +580,36 @@ class _ImportCreated(adsk.core.CommandCreatedEventHandler):
 
 # ---- registration ---------------------------------------------------------
 
+def _remove_command(cmd_id):
+    """Delete a command definition AND its panel control, so register() is
+    idempotent: re-running it can never accumulate duplicate commandCreated
+    handlers (which would build the dialog N times) or a duplicate button.
+    Targeted (itemById, no full-panel scan) so it stays fast."""
+    try:
+        panel = _ui.allToolbarPanels.itemById(PANEL_ID)
+        if panel:
+            ctrl = panel.controls.itemById(cmd_id)
+            if ctrl:
+                ctrl.deleteMe()
+    except Exception:
+        eqlog.log_caught("custom_feature._remove_command/control",
+                         cmd=cmd_id, level=logging.DEBUG)
+    try:
+        cd = _ui.commandDefinitions.itemById(cmd_id)
+        if cd:
+            cd.deleteMe()
+    except Exception:
+        eqlog.log_caught("custom_feature._remove_command/def", cmd=cmd_id, level=logging.DEBUG)
+
+
 def _button(cmd_id, name, tooltip, handler, add_to_panel=True):
-    cmd_def = _ui.commandDefinitions.itemById(cmd_id)
-    if not cmd_def:
-        cmd_def = _ui.commandDefinitions.addButtonDefinition(cmd_id, name, tooltip)
+    _remove_command(cmd_id)  # clean slate -> exactly one def + one control
+    cmd_def = _ui.commandDefinitions.addButtonDefinition(cmd_id, name, tooltip)
     cmd_def.commandCreated.add(handler)
     _handlers.append(handler)
     if add_to_panel:
         panel = _ui.allToolbarPanels.itemById(PANEL_ID)
-        if panel and not panel.controls.itemById(cmd_id):
+        if panel:
             panel.controls.addCommand(cmd_def)
     return cmd_def
 
@@ -596,6 +617,7 @@ def _button(cmd_id, name, tooltip, handler, add_to_panel=True):
 def register(app, ui):
     global _app, _ui, _cdef
     _app, _ui = app, ui
+    _handlers.clear()  # drop stale handler refs from a previous load
     # edit/regen/import/export must exist before editCommandId references EDIT_ID
     _button(EDIT_ID, "Edit Equation Curve",
             "Edit the selected equation-curve feature or spline", _EditCreated(), add_to_panel=True)
@@ -636,15 +658,5 @@ def register(app, ui):
 
 def unregister():
     _clear_preview()
-    panel = _ui.allToolbarPanels.itemById(PANEL_ID)
     for cmd_id in (CREATE_ID, EDIT_ID, REGEN_ID, EXPORT_ID, IMPORT_ID):
-        try:
-            if panel:
-                ctrl = panel.controls.itemById(cmd_id)
-                if ctrl:
-                    ctrl.deleteMe()
-            cd = _ui.commandDefinitions.itemById(cmd_id)
-            if cd:
-                cd.deleteMe()
-        except Exception:
-            pass
+        _remove_command(cmd_id)
