@@ -90,6 +90,30 @@ def test_describe_empty_domain():
     assert "empty domain" in msg.lower()
 
 
+# ---- error localization (audit fixes) -------------------------------------
+
+def test_sampling_error_reports_singular_count():
+    cd = CurveDef(mode="explicit", coord="cartesian", dim=2,
+                  exprs={"y": "ln(x)"}, var="x", t_min="-10", t_max="-1", samples=50)
+    with pytest.raises(SamplingError) as ei:
+        sample(cd)
+    assert "singular" in str(ei.value).lower()
+
+
+def test_non_numeric_param_error_names_it():
+    ev = Evaluator()
+    with pytest.raises(ExpressionError) as ei:
+        ev.eval("D3 * 2", {"D3": "oops"})
+    assert "D3" in str(ei.value) and "numeric" in str(ei.value).lower()
+
+
+def test_wrong_arity_error_names_function():
+    ev = Evaluator()
+    with pytest.raises(ExpressionError) as ei:
+        ev.eval("sin(1, 2)", {})
+    assert "sin" in str(ei.value)
+
+
 # ---- FR-10.3: adaptive chord-deviation tolerance --------------------------
 
 def test_adaptive_deviation_tolerance_adds_points_and_is_deterministic():

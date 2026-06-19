@@ -5,6 +5,7 @@ C0 spike). MS-3 additions: preset picker, real-time preview, origin+rotation,
 import/export, readable error messages, circular-reference guard.
 """
 
+import logging
 import os
 import sys
 import traceback
@@ -15,9 +16,55 @@ import adsk.fusion
 import dialog
 from eqcurve import adapter
 from eqcurve.core import (
-    CurveDef, referenced_names, circular_reference, runs_for,
+    CurveDef, referenced_names, circular_reference, runs_for, eqlog,
 )
 from eqcurve.core import describe as _describe  # readable error text (FR-12.5)
+
+_log = eqlog.get_logger()
+
+
+def _safe_json(cd):
+    """CurveDef -> JSON for logging context; never throws."""
+    try:
+        return cd.to_json()
+    except Exception:
+        return repr(cd)
+
+
+def _dump_inputs(inputs):
+    """Collect the dialog field values into a dict for error context (guarded)."""
+    out = {}
+    for fid in ("mode", "coord", "ex", "ey", "ez", "var", "tmin", "tmax",
+                "samples", "closed", "deg", "adaptive", "tol"):
+        try:
+            it = inputs.itemById(fid)
+            if it is None:
+                continue
+            out[fid] = it.selectedItem.name if hasattr(it, "selectedItem") else it.value
+        except Exception:
+            out[fid] = "<unreadable>"
+    return out
+
+
+def _fail(where, exc, **ctx):
+    """Log the full traceback + context to the log file, then show a friendly,
+    localized message (with the log path) — replaces bare messageBox(describe)."""
+    eqlog.report(where, **ctx)
+    try:
+        _ui.messageBox("Equation Curve error:\n\n" + _describe(exc)
+                       + "\n\n[" + where + "]\n(full details logged to "
+                       + eqlog.log_path() + ")")
+    except Exception:
+        pass
+
+
+def _fail_tb(where, **ctx):
+    """Like _fail but where the exception isn't bound (dialog-build failures)."""
+    msg = eqlog.report(where, **ctx)
+    try:
+        _ui.messageBox("Equation Curve error in " + where + ":\n\n" + msg)
+    except Exception:
+        pass
 
 CF_DEF_ID = "eqcurve_customfeature"
 CREATE_ID = "eqcurve_create"
@@ -76,6 +123,7 @@ def _off_cm(sketch, pt_ent):
         sp = sketch.modelToSketchSpace(w)
         return (sp.x, sp.y, 0.0)
     except Exception:
+        eqlog.log_caught("custom_feature._off_cm", sketch=getattr(sketch, "name", None))
         return (0.0, 0.0, 0.0)
 
 
@@ -137,7 +185,8 @@ def _check_circular(design, cd):
         try:
             exprs[p.name] = p.expression
         except Exception:
-            pass
+            eqlog.log_caught("custom_feature._check_circular",
+                             param=getattr(p, "name", "?"), level=logging.DEBUG)
     cyc = circular_reference(exprs, cd.angle) & referenced_names(cd)
     if cyc:
         raise ValueError("Circular parameter reference involving: " + ", ".join(sorted(cyc)))
@@ -182,8 +231,15 @@ class _ComputeHandler(adsk.fusion.CustomFeatureEventHandler):
             if not (da and ba and sa):
                 return
             cd = CurveDef.from_json(da.value)
-            base = design.findEntityByToken(ba.value)[0]
-            sketch = design.findEntityByToken(sa.value)[0]
+            base_ents = design.findEntityByToken(ba.value)
+            sk_ents = design.findEntityByToken(sa.value)
+            if not base_ents or not sk_ents:
+                _log.error("compute: stale token (base=%s sketch=%s) on feature %r — "
+                           "geometry not rebuilt", bool(base_ents), bool(sk_ents),
+                           getattr(cf, "name", "?"))
+                return
+            base = base_ents[0]
+            sketch = sk_ents[0]
             params = adapter.read_design_params(design)
             # the origin point comes from the custom-feature DEPENDENCY (Fusion
             # keeps that reference valid across moves/edits, unlike a raw token).
@@ -192,21 +248,29 @@ class _ComputeHandler(adsk.fusion.CustomFeatureEventHandler):
                 dep = cf.dependencies.itemById("dep_origin_pt")
                 pt_ent = dep.entity if dep else None
             except Exception:
+                eqlog.log_caught("custom_feature._ComputeHandler.notify",
+                                 stage="dep-lookup", level=logging.DEBUG)
                 pt_ent = None
             if pt_ent is None:
                 pa = cf.attributes.itemByName(_GRP, ATTR_PT)
                 pt_ent = _resolve(design, pa.value) if pa else None
             off = _off_cm(sketch, pt_ent)
+            _log.debug("compute %r: rebuilding (off=%s)", getattr(cf, "name", "?"), off)
             base.startEdit()
-            _clear_splines(sketch)
-            adapter.build_curve_runs(sketch, cd, params, off_cm=off)
-            base.finishEdit()
+            try:
+                _clear_splines(sketch)
+                adapter.build_curve_runs(sketch, cd, params, off_cm=off)
+            finally:
+                base.finishEdit()
         except Exception:
+            eqlog.report("custom_feature._ComputeHandler.notify",
+                         cf=getattr(args.customFeature, "name", "?"))
             try:
                 if base is not None:
                     base.finishEdit()
             except Exception:
-                pass
+                eqlog.log_caught("custom_feature._ComputeHandler.notify",
+                                 stage="finishEdit-cleanup", level=logging.DEBUG)
 
 
 # ---- create ---------------------------------------------------------------
@@ -233,7 +297,7 @@ class _CreateCreated(adsk.core.CommandCreatedEventHandler):
             cmd.destroy.add(de)
             _handlers.append(de)
         except Exception:
-            _ui.messageBox("Create dialog failed:\n" + traceback.format_exc())
+            _fail_tb("custom_feature._CreateCreated")
 
 
 class _PresetChanged(adsk.core.InputChangedEventHandler):
@@ -241,7 +305,7 @@ class _PresetChanged(adsk.core.InputChangedEventHandler):
         try:
             dialog.on_input_changed(args.inputs, args.input)
         except Exception:
-            pass  # preset/insert helpers are best-effort
+            eqlog.log_caught("custom_feature._PresetChanged", level=logging.DEBUG)
 
 
 class _PreviewHandler(adsk.core.CommandEventHandler):
@@ -297,7 +361,7 @@ class _CreateExecute(adsk.core.CommandEventHandler):
                                plane_ent=_sel_entity(inputs, "plane"),
                                origin_pt_ent=pt)
         except Exception as exc:
-            _ui.messageBox("Equation Curve: " + _describe(exc))
+            _fail("custom_feature._CreateExecute", exc, inputs=_dump_inputs(inputs))
 
 
 def create_feature(design, cd, params=None, plane_ent=None, origin_pt_ent=None):
@@ -316,9 +380,11 @@ def create_feature(design, cd, params=None, plane_ent=None, origin_pt_ent=None):
     plane = plane_ent or comp.xYConstructionPlane
     base = comp.features.baseFeatures.add()
     base.startEdit()
-    sketch = comp.sketches.add(plane)
-    adapter.build_curve_runs(sketch, cd, params, off_cm=_off_cm(sketch, origin_pt_ent))
-    base.finishEdit()
+    try:  # ensure finishEdit even if the build fails (else base is stuck in edit)
+        sketch = comp.sketches.add(plane)
+        adapter.build_curve_runs(sketch, cd, params, off_cm=_off_cm(sketch, origin_pt_ent))
+    finally:
+        base.finishEdit()
     base_tok, sk_tok = base.entityToken, sketch.entityToken
 
     cfin = comp.features.customFeatures.createInput(_cdef)
@@ -328,7 +394,7 @@ def create_feature(design, cd, params=None, plane_ent=None, origin_pt_ent=None):
             try:
                 cfin.addDependency("dep_" + dep_id, ent)
             except Exception:
-                pass
+                eqlog.log_caught("custom_feature.create_feature/addDependency", dep=dep_id)
     cfin.setStartAndEndFeatures(base, base)
     cf = comp.features.customFeatures.add(cfin)
 
@@ -358,11 +424,11 @@ def _mirror_params(design, cfin, cd):
             cfin.addCustomParameter("mir_" + nm, nm,
                                     adsk.core.ValueInput.createByString(nm), unit, True)
         except Exception:
-            pass
+            eqlog.log_caught("custom_feature._mirror_params/addCustomParameter", param=nm)
         try:
             cfin.addDependency("dep_" + nm, p)
         except Exception:
-            pass
+            eqlog.log_caught("custom_feature._mirror_params/addDependency", param=nm)
 
 
 # ---- edit (double-click via editCommandId) --------------------------------
@@ -407,7 +473,7 @@ class _EditCreated(adsk.core.CommandCreatedEventHandler):
             cmd.execute.add(ex)
             _handlers.append(ex)
         except Exception:
-            _ui.messageBox("Edit dialog failed:\n" + traceback.format_exc())
+            _fail_tb("custom_feature._EditCreated")
 
 
 class _EditInputChanged(adsk.core.InputChangedEventHandler):
@@ -436,7 +502,7 @@ class _EditExecute(adsk.core.CommandEventHandler):
             self._cf.attributes.add(_GRP, ATTR_DEF, cd.to_json())
             _design().computeAll()
         except Exception as exc:
-            _ui.messageBox("Edit Equation Curve: " + _describe(exc))
+            _fail("custom_feature._EditExecute", exc, cf=getattr(self._cf, "name", "?"))
 
 
 class _EditSplineExecute(adsk.core.CommandEventHandler):
@@ -455,7 +521,7 @@ class _EditSplineExecute(adsk.core.CommandEventHandler):
             for sp2 in new:          # keep it fully defined after the edit
                 _fix_spline(sp2)
         except Exception as exc:
-            _ui.messageBox("Edit Equation Curve: " + _describe(exc))
+            _fail("custom_feature._EditSplineExecute", exc, inputs=_dump_inputs(inputs))
 
 
 # ---- regenerate (PC-8) ----------------------------------------------------
@@ -472,7 +538,7 @@ class _RegenExecute(adsk.core.CommandEventHandler):
         try:
             _design().computeAll()
         except Exception as exc:
-            _ui.messageBox("Regenerate: " + _describe(exc))
+            _fail("custom_feature._RegenExecute", exc)
 
 
 # ---- import / export (FR-12.6) --------------------------------------------
@@ -494,7 +560,7 @@ class _ExportCreated(adsk.core.CommandCreatedEventHandler):
             with open(dlg.filename, "w", encoding="utf-8") as f:
                 f.write(text)
         except Exception:
-            _ui.messageBox("Export failed:\n" + traceback.format_exc())
+            _fail_tb("custom_feature._ExportCreated")
 
 
 class _ImportCreated(adsk.core.CommandCreatedEventHandler):
@@ -509,7 +575,7 @@ class _ImportCreated(adsk.core.CommandCreatedEventHandler):
                 cd = CurveDef.from_json(f.read())
             create_feature(_design(), cd)
         except Exception as exc:
-            _ui.messageBox("Import failed: " + _describe(exc))
+            _fail("custom_feature._ImportCreated", exc)
 
 
 # ---- registration ---------------------------------------------------------

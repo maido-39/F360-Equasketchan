@@ -78,8 +78,13 @@ def _run_script(script, session):
         return {"ok": True, "stdout": buf.getvalue(),
                 "result": str(ns.get("__result__", ""))}
     except Exception:
-        return {"ok": False, "stdout": buf.getvalue(),
-                "error": traceback.format_exc()}
+        tb = traceback.format_exc()
+        try:  # also surface it in Fusion's Text Commands window (main thread)
+            if _app:
+                _app.log("[FusionEqBridge] execute error in session %r:\n%s" % (session, tb))
+        except Exception:
+            pass
+        return {"ok": False, "stdout": buf.getvalue(), "error": tb}
 
 
 def _screenshot(width, height):

@@ -152,7 +152,12 @@ class Evaluator:
             raise ExpressionError(f"non-numeric constant: {node.value!r}")
         if isinstance(node, ast.Name):
             if node.id in names and not callable(names[node.id]):
-                return float(names[node.id])
+                try:
+                    return float(names[node.id])
+                except (TypeError, ValueError):
+                    raise ExpressionError(
+                        f"value of {node.id!r} is not numeric "
+                        f"(got {type(names[node.id]).__name__})")
             raise ExpressionError(f"unknown name: {node.id}")
         if isinstance(node, ast.UnaryOp):
             val = self._eval_node(node.operand, names)
@@ -178,5 +183,9 @@ class Evaluator:
         if isinstance(node, ast.Call):
             func = names[node.func.id]
             args = [self._eval_node(a, names) for a in node.args]
-            return float(func(*args))
+            try:
+                return float(func(*args))
+            except (TypeError, ValueError) as exc:
+                # wrong arg count, or a domain error (sqrt(-1), ln(<=0)…) — name it
+                raise ExpressionError(f"{node.func.id}(): {exc}")
         raise ExpressionError(f"cannot evaluate node: {type(node).__name__}")

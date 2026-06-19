@@ -37,16 +37,36 @@ def run(context):
     global _app, _ui
     _app = adsk.core.Application.get()
     _ui = _app.userInterface
+    # wire rich logging: file + stderr + Fusion's Text Commands window. Failures
+    # here must never block startup, so this is its own guarded block.
+    try:
+        from eqcurve.core import eqlog
+        eqlog.configure()
+        eqlog.add_callback_sink(_app.log)
+        eqlog.get_logger().info("EquationCurve add-in starting (Fusion %s); log: %s",
+                                _app.version, eqlog.log_path())
+    except Exception:
+        pass
     try:
         custom_feature.register(_app, _ui)
     except Exception:
+        try:
+            from eqcurve.core import eqlog
+            msg = eqlog.report("EquationCurve.run")
+        except Exception:
+            msg = traceback.format_exc()
         if _ui:
-            _ui.messageBox("Add-in run failed:\n" + traceback.format_exc())
+            _ui.messageBox("Equation Curve add-in failed to start:\n\n" + msg)
 
 
 def stop(context):
     try:
         custom_feature.unregister()
     except Exception:
+        try:
+            from eqcurve.core import eqlog
+            eqlog.report("EquationCurve.stop")
+        except Exception:
+            pass
         if _ui:
             _ui.messageBox("Add-in stop failed:\n" + traceback.format_exc())

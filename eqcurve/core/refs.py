@@ -13,6 +13,7 @@ from typing import Dict, Set
 
 from .curvedef import CurveDef
 from .evaluator import reserved_names
+from . import eqlog
 
 # Independent-variable aliases the sampler injects; never design parameters.
 _INDEP_ALIASES = {"t", "x", "a"}
@@ -25,6 +26,7 @@ def _names_in(expr: str) -> Set[str]:
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError:
+        eqlog.log_caught("refs._names_in", expr=expr)
         return set()
     return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
 

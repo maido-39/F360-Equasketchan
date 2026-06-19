@@ -6,12 +6,15 @@ the package stays testable without Fusion. Imported only inside Fusion.
 
 from __future__ import annotations
 
+import math
 from typing import List, Mapping, Optional, Tuple
 
 import adsk.core
 import adsk.fusion
 
-from .core import CurveDef, runs_for, is_effectively_closed, decimate
+from .core import CurveDef, runs_for, is_effectively_closed, decimate, eqlog
+
+_log = eqlog.get_logger()
 
 _ATTR_GROUP = "eqcurve"
 _ATTR_DEF = "curvedef_json"
@@ -57,6 +60,10 @@ def _param_value_mm(p, um) -> float:
         try:
             return um.convert(p.value, "cm", "mm")
         except Exception:
+            # the x10 fallback assumes cm->mm; if the param is e.g. inches this
+            # would be wrong, so make it traceable rather than silent.
+            eqlog.log_caught("adapter._param_value_mm",
+                             param=getattr(p, "name", "?"), unit=unit, fallback="x10")
             return p.value * 10.0
     return p.value
 
@@ -74,10 +81,13 @@ def read_design_params(design: "adsk.fusion.Design") -> dict:
         try:
             out[p.name] = _param_value_mm(p, um)
         except Exception:
+            eqlog.log_caught("adapter.read_design_params",
+                             param=getattr(p, "name", "?"), stage="value-mm")
             try:
                 out[p.name] = p.value
             except Exception:
-                pass
+                eqlog.log_caught("adapter.read_design_params",
+                                 param=getattr(p, "name", "?"), stage="raw-value-dropped")
     return out
 
 
@@ -89,7 +99,8 @@ def read_design_params_typed(design: "adsk.fusion.Design") -> dict:
         try:
             out[p.name] = (_param_value_mm(p, um), p.unit)
         except Exception:
-            pass
+            eqlog.log_caught("adapter.read_design_params_typed",
+                             param=getattr(p, "name", "?"))
     return out
 
 
@@ -100,6 +111,9 @@ def _add_spline(sketch, run, cd: CurveDef, single_run: bool, off_cm=(0.0, 0.0, 0
     ox, oy, oz = off_cm
     coll = adsk.core.ObjectCollection.create()
     for x, y, z in run:
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            _log.debug("skipping non-finite point (%r, %r, %r)", x, y, z)
+            continue
         coll.add(adsk.core.Point3D.create(
             x * MM_TO_CM + ox, y * MM_TO_CM + oy, z * MM_TO_CM + oz))
     spline = sketch.sketchCurves.sketchFittedSplines.add(coll)
@@ -129,6 +143,8 @@ def build_curve_runs(
     """
     runs = runs_for(cd, params)
     single = len(runs) == 1
+    _log.info("build_curve_runs: %d run(s) coord=%s mode=%s pts=%d",
+              len(runs), cd.coord, cd.mode, sum(len(r) for r in runs))
     return [_add_spline(sketch, run, cd, single, off_cm) for run in runs]
 
 
@@ -152,11 +168,11 @@ def rebuild_curve(
     if not isinstance(splines, (list, tuple)):
         splines = [splines]
     sketch = splines[0].parentSketch
-    for sp in splines:
+    for i, sp in enumerate(splines):
         try:
             sp.deleteMe()
         except Exception:
-            pass
+            eqlog.log_caught("adapter.rebuild_curve", spline_index=i)
     return build_curve_runs(sketch, cd, params)
 
 
@@ -175,7 +191,12 @@ def read_definition(entity) -> Optional[CurveDef]:
     attr = entity.attributes.itemByName(_ATTR_GROUP, _ATTR_DEF)
     if attr is None:
         return None
-    return CurveDef.from_json(attr.value)
+    try:
+        return CurveDef.from_json(attr.value)
+    except Exception:
+        # a corrupt stored definition must be visible, not silently None
+        msg = eqlog.report("adapter.read_definition", stored=str(attr.value)[:200])
+        raise ValueError("stored equation definition is corrupted.\n" + msg)
 
 
 def sibling_eqcurve_splines(spline) -> list:
@@ -194,5 +215,6 @@ def sibling_eqcurve_splines(spline) -> list:
             if a is not None and a.value == target.value:
                 out.append(sp)
     except Exception:
+        eqlog.log_caught("adapter.sibling_eqcurve_splines")
         return [spline]
     return out or [spline]

@@ -30,8 +30,14 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 from .curvedef import CurveDef
 from .evaluator import Evaluator, ExpressionError
+from . import eqlog
+
+_log = eqlog.get_logger()
 
 Point = Tuple[float, float, float]
+# required component keys per non-cartesian coordinate system (for validation)
+_REQUIRED = {"polar": ("r", "theta"), "cylindrical": ("r", "theta", "z"),
+             "spherical": ("r", "phi", "theta")}
 Run = List[Point]
 
 # A finite-to-finite step longer than this many times the median step starts a
@@ -48,6 +54,13 @@ def _angle_to_rad(value: float, angle: str) -> float:
 
 
 def _to_cartesian(coord: str, comps: Dict[str, float], angle: str) -> Point:
+    req = _REQUIRED.get(coord)
+    if req:
+        missing = [k for k in req if k not in comps]
+        if missing:
+            raise SamplingError(
+                "%s coords: missing components %s (have %s)"
+                % (coord, missing, sorted(comps)))
     if coord == "cartesian":
         return (comps.get("x", 0.0), comps.get("y", 0.0), comps.get("z", 0.0))
     if coord == "polar":
@@ -128,9 +141,12 @@ def _eval_one(
             for k in keys:
                 comps[k] = ev.eval(cd.exprs[k], scope)
         x, y, z = _to_cartesian(cd.coord, comps, cd.angle)
-    except (ExpressionError, ValueError, ZeroDivisionError, OverflowError):
+    except (ExpressionError, ValueError, ZeroDivisionError, OverflowError) as exc:
+        _log.debug("singular sample u=%.6g coord=%s mode=%s keys=%s: %s",
+                   u, cd.coord, cd.mode, keys, exc)
         return None
     if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+        _log.debug("non-finite sample u=%.6g coord=%s -> dropped", u, cd.coord)
         return None
     if rot != (0.0, 0.0, 0.0):
         x, y, z = _rotate((x, y, z), rot)
@@ -222,8 +238,18 @@ def sample_runs(cd: CurveDef, params: Optional[Mapping[str, float]] = None) -> L
     raw = [(u, _eval_one(cd, params, ev, keys, u, origin, rot)) for u in tvals]
     runs = _segment(raw)
     if not runs:
-        raise SamplingError("fewer than 2 finite points produced")
+        raise _too_few(raw, cd)
     return runs
+
+
+def _too_few(raw, cd) -> "SamplingError":
+    """Build a diagnostic SamplingError that says HOW the sampling came up empty."""
+    n_sing = sum(1 for _, p in raw if p is None)
+    msg = ("fewer than 2 finite points (%d of %d samples were singular/non-finite) "
+           "— the expression may be undefined across the domain "
+           "(division by zero, ln of <=0, asymptotes, etc.)" % (n_sing, len(raw)))
+    _log.warning("sampling failed: %s | coord=%s exprs=%s", msg, cd.coord, cd.exprs)
+    return SamplingError(msg)
 
 
 def _chord_deviation(a: Point, m: Point, b: Point) -> float:
@@ -296,7 +322,7 @@ def adaptive_sample_runs(
     raw = [(u, pt(u)) for u in sorted(ts)]
     runs = _segment(raw)
     if not runs:
-        raise SamplingError("fewer than 2 finite points produced")
+        raise _too_few(raw, cd)
     return runs
 
 
@@ -332,7 +358,8 @@ def decimate(run: Run, cap: int) -> Run:
     n = len(run)
     if not cap or cap < 2 or n <= cap:
         return run
-    return [run[round(i * (n - 1) / (cap - 1))] for i in range(cap)]
+    _log.debug("decimate %d -> %d points", n, cap)
+    return [run[min(n - 1, round(i * (n - 1) / (cap - 1)))] for i in range(cap)]
 
 
 def is_effectively_closed(pts: List[Point], tol: float = 1e-6) -> bool:
