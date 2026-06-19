@@ -74,6 +74,13 @@ class _Value:
         self.value = value
 
 
+class _TextBox:
+    """Mirrors Fusion's TextBoxCommandInput: text lives in .formattedText, so a
+    test (or production) that mistakenly used .value would NOT silently pass."""
+    def __init__(self, text):
+        self.formattedText = text
+
+
 class _Group:
     def __init__(self, children):
         self.isExpanded = True
@@ -112,7 +119,7 @@ class MockInputs:
         return self._by[_id]
 
     def addTextBoxCommandInput(self, _id, _name, text, _rows, _ro):
-        self._by[_id] = _Value(text)
+        self._by[_id] = _TextBox(text)
         return self._by[_id]
 
     def addGroupCommandInput(self, _id, _name):
@@ -229,3 +236,15 @@ def test_live_validation_ok_for_known_param():
     mi.itemById("ey").value = "D3*sin(t)"
     dialog.on_input_changed(mi, _Changed("ey"))
     assert "OK" in mi.itemById("status").formattedText
+
+
+def test_live_validation_flags_var_that_sampler_wont_inject():
+    # independent var is x, so 't' is NOT injected by the sampler; referencing it
+    # must be flagged (previously 't' was unconditionally treated as known).
+    mi = MockInputs()
+    dialog.build_inputs(mi, None, [])
+    mi.itemById("ex").value = ""        # avoid the default ex='t'
+    mi.itemById("var").value = "x"
+    mi.itemById("ey").value = "sin(t)"
+    dialog.on_input_changed(mi, _Changed("ey"))
+    assert "name(s): t" in mi.itemById("status").formattedText

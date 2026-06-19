@@ -168,9 +168,13 @@ __result__ = json.dumps(res)
 
 
 def main():
-    h = _request("/health")
+    # ?deep=1 round-trips through Fusion's main thread, so this gate verifies
+    # Fusion is actually responsive (a plain /health only confirms the HTTP
+    # server thread and would pass even against a wedged main thread).
+    h = _request("/health?deep=1")
     assert h.get("ok"), f"bridge health failed: {h}"
-    print("health ok")
+    assert h.get("fusion"), f"Fusion main thread not responding (wedged?): {h}"
+    print("health ok (server + fusion main thread)")
 
     script = _FUSION_SCRIPT.format(proj=PROJECT_ROOT)
     out = _request("/execute", {"script": script, "session": "harness"})

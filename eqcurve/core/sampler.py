@@ -206,24 +206,41 @@ def _split_on_speed(run, gap_factor: float):
     return segs
 
 
+# Sampling runs on Fusion's MAIN THREAD, so the point count must be bounded: an
+# unbounded count (e.g. a "10*N" expression driven by a large design parameter,
+# or a stored samples=5_000_000) would spin the compute handler for a very long
+# time and wedge the UI. decimate() only caps the spline FIT, not the number of
+# sample evaluations, so the cap has to live here.
+MAX_SAMPLES = 100_000
+
+
 def _resolve_samples(cd: CurveDef, ev: Evaluator, params: Mapping[str, float]) -> int:
-    """Point count, allowing a parameter/expression (FR-8.3). Clamped to >= 2.
+    """Point count, allowing a parameter/expression (FR-8.3). Clamped to [2, MAX_SAMPLES].
 
     ``cd.samples`` is normally an int but may be an expression string such as
-    ``"10*N"`` so the resolution can be driven by a design parameter.
+    ``"10*N"`` so the resolution can be driven by a design parameter. Any failure
+    to evaluate it to a finite number is surfaced as a diagnostic SamplingError
+    (never a raw ZeroDivisionError/OverflowError escaping to the caller).
     """
     s = cd.samples
     if isinstance(s, str):
         try:
-            s = ev.eval(s, params)
-        except ExpressionError as exc:
+            s = ev.eval(s.strip(), params)
+        except (ExpressionError, ZeroDivisionError, OverflowError, ValueError) as exc:
             raise SamplingError("samples expression %r is invalid: %s" % (cd.samples, exc))
     try:
         n = int(round(float(s)))
-    except (TypeError, ValueError):
-        raise SamplingError("samples did not evaluate to a number: %r" % (cd.samples,))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SamplingError("samples did not evaluate to a finite number: %r (%s)"
+                            % (cd.samples, exc))
     if n < 2:
         raise SamplingError("samples must be >= 2 (got %d from %r)" % (n, cd.samples))
+    if n > MAX_SAMPLES:
+        # clamp rather than raise: the curve still builds (just coarser) and the
+        # main thread is protected. decimate() further bounds the spline fit.
+        _log.warning("samples %d exceeds cap %d (from %r) -> clamped to cap",
+                     n, MAX_SAMPLES, cd.samples)
+        n = MAX_SAMPLES
     return n
 
 

@@ -32,10 +32,17 @@ def _safe_json(cd):
 
 
 def _dump_inputs(inputs):
-    """Collect the dialog field values into a dict for error context (guarded)."""
+    """Collect the dialog field values into a dict for error context (guarded).
+
+    Covers every expression-bearing field read_inputs/_domain now evaluates,
+    including origin (ox/oy/oz) and rotation (rx/ry/rz) — a bad origin/rotation
+    expression is a real failure mode, so it must appear in the diagnostic."""
     out = {}
+    if inputs is None:
+        return out
     for fid in ("mode", "coord", "ex", "ey", "ez", "var", "tmin", "tmax",
-                "samples", "closed", "deg", "adaptive", "tol"):
+                "samples", "ox", "oy", "oz", "rx", "ry", "rz",
+                "closed", "deg", "adaptive", "tol"):
         try:
             it = inputs.itemById(fid)
             if it is None:
@@ -49,9 +56,13 @@ def _dump_inputs(inputs):
 # Modals BLOCK Fusion's main thread until a human clicks. That is fine for an
 # interactive click, but fatal under automation (a bridge-driven reload that
 # errors would pop a modal nobody can dismiss, wedging the main thread and every
-# subsequent API call). So error reporting ALWAYS logs (non-blocking), and the
-# modal is gated by this switch — disable it before driving the add-in headlessly.
+# subsequent API call). Two defenses: (1) error reporting ALWAYS logs first, and
+# the modal is gated by this switch (disable it before driving headlessly); and
+# (2) every modal we show is AUTO-DISMISSED after a timeout by an in-process
+# watchdog thread, so even a modal that slips through can never wedge the main
+# thread indefinitely.
 _MODALS_ENABLED = True
+_MODAL_TIMEOUT_S = 15  # auto-close a message box after this many seconds
 
 
 def set_modals(enabled: bool) -> None:
@@ -60,12 +71,73 @@ def set_modals(enabled: bool) -> None:
     _MODALS_ENABLED = bool(enabled)
 
 
-def _modal(text: str) -> None:
-    """Show a blocking messageBox only when modals are enabled; never raise."""
+def _autoclose_window(title, timeout):
+    """After `timeout`s, post WM_CLOSE to this process's window captioned `title`.
+
+    Runs on a daemon thread INSIDE Fusion, so it can reach Fusion's own windows
+    (no Session-0/Session-2 isolation, unlike an external process). Targets by
+    exact caption so it only ever closes the message box we opened. Best-effort;
+    never raises. Windows-only (Fusion's host), guarded so import stays portable.
+    """
+    def worker():
+        try:
+            import time as _time
+            import ctypes
+            from ctypes import wintypes
+            _time.sleep(max(1, int(timeout)))
+            u = ctypes.WinDLL("user32", use_last_error=True)
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            WM_CLOSE = 0x0010
+            u.FindWindowW.restype = wintypes.HWND
+            u.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+            u.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT,
+                                       wintypes.WPARAM, wintypes.LPARAM]
+            u.IsWindowVisible.argtypes = [wintypes.HWND]
+            u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+            u.GetWindowThreadProcessId.argtypes = [wintypes.HWND,
+                                                   ctypes.POINTER(wintypes.DWORD)]
+            # 1) precise: find by exact window caption
+            hwnd = u.FindWindowW(None, title)
+            if hwnd:
+                u.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                return
+            # 2) fallback: any visible top-level window of THIS process captioned `title`
+            mypid = k.GetCurrentProcessId()
+            EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def cb(h, _l):
+                pid = wintypes.DWORD()
+                u.GetWindowThreadProcessId(h, ctypes.byref(pid))
+                if pid.value == mypid and u.IsWindowVisible(h):
+                    n = u.GetWindowTextLengthW(h)
+                    if n:
+                        buf = ctypes.create_unicode_buffer(n + 1)
+                        u.GetWindowTextW(h, buf, n + 1)
+                        if buf.value == title:
+                            u.PostMessageW(h, WM_CLOSE, 0, 0)
+                return True
+
+            proc = EnumProc(cb)            # keep a ref so it survives EnumWindows
+            u.EnumWindows(proc, 0)
+        except Exception:
+            pass
+
+    import threading
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _modal(text: str, title: str = "Equation Curve") -> None:
+    """Show a message box that AUTO-CLOSES after _MODAL_TIMEOUT_S seconds.
+
+    Gated by _MODALS_ENABLED; never raises. The title must be unique enough that
+    the auto-close watchdog only matches this dialog. messageBox blocks the main
+    thread until the user clicks OR the watchdog closes it — so it is bounded."""
     if not (_MODALS_ENABLED and _ui):
         return
     try:
-        _ui.messageBox(text)
+        _autoclose_window(title, _MODAL_TIMEOUT_S)
+        _ui.messageBox(text, title)
     except Exception:
         pass
 
@@ -76,13 +148,13 @@ def _fail(where, exc, **ctx):
     eqlog.report(where, **ctx)
     _modal("Equation Curve error:\n\n" + _describe(exc)
            + "\n\n[" + where + "]\n(full details logged to "
-           + eqlog.log_path() + ")")
+           + eqlog.log_path() + ")", "Equation Curve error")
 
 
 def _fail_tb(where, **ctx):
     """Like _fail but where the exception isn't bound (dialog-build failures)."""
     msg = eqlog.report(where, **ctx)
-    _modal("Equation Curve error in " + where + ":\n\n" + msg)
+    _modal("Equation Curve error in " + where + ":\n\n" + msg, "Equation Curve error")
 
 CF_DEF_ID = "eqcurve_customfeature"
 CREATE_ID = "eqcurve_create"
@@ -357,6 +429,7 @@ class _CreateExecute(adsk.core.CommandEventHandler):
 
     def notify(self, args):
         _clear_preview()
+        inputs = None  # bind before the try so the except can always dump it
         try:
             inputs = args.command.commandInputs
             cd = dialog.read_inputs(inputs)
@@ -526,6 +599,7 @@ class _EditExecute(adsk.core.CommandEventHandler):
 class _EditSplineExecute(adsk.core.CommandEventHandler):
     """Re-edit the selected sketch-embedded equation spline (rebuild all runs)."""
     def notify(self, args):
+        inputs = None  # bind before the try so the except can always dump it
         try:
             inputs = args.command.commandInputs
             si = inputs.itemById("target")

@@ -33,6 +33,11 @@ _EXPR_FIELDS = ("ex", "ey", "ez", "tmin", "tmax", "samples",
 _last_field = {"id": "ey"}
 # design-parameter names known to the dialog, for live unknown-name detection
 _known_params = {"names": []}
+# cached for the per-keystroke validation path: the built-in NAME set and the
+# function table are angle-invariant (only the lambda bodies differ rad vs deg),
+# so one instance each is correct regardless of the Degrees toggle.
+_RESERVED = reserved_names()
+_EV = Evaluator(angle="rad")
 
 # Tutorial / reference text (Inventor Equation-Curve style). FR-12 tutorial+intuitive.
 _HELP_HOWTO = (
@@ -227,20 +232,37 @@ def _idents(expr: str):
     return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
 
 
+def _selected(inputs, fid: str) -> str:
+    """Selected dropdown item name (''  on any failure)."""
+    it = inputs.itemById(fid)
+    try:
+        return it.selectedItem.name if it is not None else ""
+    except Exception:
+        return ""
+
+
+def _indep_var(inputs) -> str:
+    """Independent variable, resolved EXACTLY as read_inputs does (so validation
+    matches what the sampler will actually inject)."""
+    vi = inputs.itemById("var")
+    v = vi.value.strip() if (vi is not None and vi.value) else ""
+    if v:
+        return v
+    return "a" if (_selected(inputs, "mode") == "explicit"
+                   and _selected(inputs, "coord") == "polar") else "t"
+
+
 def _validate_current(inputs: adsk.core.CommandInputs) -> str:
     """Parse every expression field; return an HTML status line (FR-7.3).
 
     Reports the first syntax error, else any names that are neither a built-in
-    nor a known design parameter nor the independent variable, else OK.
+    nor a known design parameter nor an injected variable, else OK.
     """
-    di = inputs.itemById("deg")
-    angle = "deg" if (di is not None and di.value) else "rad"
-    vi = inputs.itemById("var")
-    var = (vi.value.strip() if (vi is not None and vi.value) else "") or "t"
-
-    ev = Evaluator(angle=angle)
-    reserved = reserved_names(angle)
-    known = set(_known_params["names"]) | {var, "t", "x", "a"}
+    var = _indep_var(inputs)
+    # The sampler always injects x and a (setdefault), plus cd.var; it injects t
+    # only when var=='t'. Mirror that exactly so the validator neither over- nor
+    # under-reports (e.g. y=sin(t) in explicit mode with var='x' IS unknown).
+    known = set(_known_params["names"]) | {var, "x", "a"}
     unknown = set()
     for label, fid in _VALIDATE_FIELDS:
         fld = inputs.itemById(fid)
@@ -248,11 +270,11 @@ def _validate_current(inputs: adsk.core.CommandInputs) -> str:
         if not expr:
             continue
         try:
-            ev.compile(expr)
+            _EV.compile(expr)
         except ExpressionError as exc:
             return "<b>Error</b> in %s: %s" % (label, exc)
         for nm in _idents(expr):
-            if nm not in reserved and nm not in known:
+            if nm not in _RESERVED and nm not in known:
                 unknown.add(nm)
     if unknown:
         return ("<b>Note</b> &mdash; unrecognized name(s): %s. Define them in "

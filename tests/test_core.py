@@ -169,3 +169,33 @@ def test_samples_invalid_expression_raises_sampling_error():
     )
     with pytest.raises(SamplingError):
         sample(cd, {})
+
+
+def test_resolve_samples_caps_huge_count():
+    # an unbounded count would spin the main thread; it must be clamped (FR-13.4)
+    from eqcurve.core.sampler import _resolve_samples, MAX_SAMPLES
+    from eqcurve.core import Evaluator
+    cd = CurveDef(exprs={"x": "t", "y": "t"}, samples="10000000")
+    n = _resolve_samples(cd, Evaluator("rad"), {})
+    assert n == MAX_SAMPLES
+
+
+def test_resolve_samples_wraps_arithmetic_errors():
+    # ZeroDivisionError / OverflowError from the samples expr must surface as a
+    # diagnostic SamplingError, never escape raw to the caller.
+    from eqcurve.core.sampler import _resolve_samples
+    from eqcurve.core import Evaluator
+    ev = Evaluator("rad")
+    for expr in ("1/0", "exp(1000)", "2**4000", "1e308*10"):
+        cd = CurveDef(exprs={"x": "t", "y": "t"}, samples=expr)
+        with pytest.raises(SamplingError):
+            _resolve_samples(cd, ev, {})
+
+
+def test_samples_expression_tolerates_whitespace():
+    cd = CurveDef(
+        mode="parametric", coord="cartesian", dim=2,
+        exprs={"x": "t", "y": "t"}, var="t", t_min="0", t_max="1",
+        samples="  10  ",
+    )
+    assert len(sample(cd, {})) == 10

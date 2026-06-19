@@ -51,7 +51,9 @@ vendor docs). Items marked **DELTA** change an assumption in the spec.
 - OpenSSH Server (`sshd`): **Running**. `ssh.exe` present.
 - Fusion 360 installed and **running** (PID live), build `2703.1.20`.
 - Bundled Python **3.14.0**; system Python **3.12** (pytest target).
-- Bridge **live**: `GET /health` → `{"ok":true,"fusion":true}`; bearer token at
+- Bridge **live**: `GET /health` → `{"ok":true,"server":true}` (HTTP-thread only;
+  add `?deep=1` for `{"ok":true,"server":true,"fusion":true}` which probes the main
+  thread). Bearer token at
   `%LOCALAPPDATA%\fusion-eqbridge\secret` (present). Bound to `127.0.0.1` (SEC-1 ok).
 - `execute` smoke test (read-only) returned Fusion version + active Design doc — the
   full agent test loop (TEST-2) works end-to-end.
@@ -131,6 +133,56 @@ transient CustomGraphics; Import/Export commands; circular-reference guard.
 Deferred (spec [S]/[C], not in the approved plan): FR-1.3 per-component laws,
 FR-8.4 promote-constant-to-param, FR-9.4/9.5 scale/mirror/snap, FR-1.5 surface
 module. (FR-10.3 fit tolerance has since been implemented.)
+
+### Main-thread wedge: root cause, prevention, auto-closing modals + adversarial review (2026-06-19)
+
+**Root cause (debugged).** The bridge became unresponsive (Fusion process
+Responding=True, port 7654 listening, every request — even `/health` — timing out).
+Cause: an error handler called `ui.messageBox()`, which BLOCKS Fusion's main thread
+until a human clicks. During automated (bridge-driven) add-in reloads there is no
+human, so a register error popped a modal that wedged the main thread and every
+subsequent main-thread call — including `/health`, which round-tripped through
+`fireCustomEvent` on that thread. It could not be cleared from the agent side: the
+agent's PowerShell is in **Session 0** (non-interactive) while Fusion's UI is in the
+user's **Session 2** (RDP), so Win32 cannot reach the modal and a scheduled-task
+workaround is blocked. Only the computer-use MCP (Session 2) or the user can dismiss it.
+
+**Prevention.**
+- `EquationCurve.run()/stop()` and `custom_feature` error reporting always **log
+  first** (non-blocking, file + Text Commands).
+- Every error modal goes through `custom_feature._modal()`, which (a) is gated by
+  `_MODALS_ENABLED` / `set_modals(False)` — armed by `EQCURVE_NO_MODAL=1` for headless
+  runs — and (b) **AUTO-CLOSES after `_MODAL_TIMEOUT_S` (15 s)** via an in-process
+  watchdog thread that posts WM_CLOSE to the dialog by exact caption (a thread inside
+  Fusion can reach Fusion's own windows; no Session isolation). So even a modal that
+  slips through can never wedge the main thread indefinitely.
+- `/health` is answered on the HTTP worker thread (server liveness) **without touching
+  the main thread**; `?deep=1` adds a short main-thread probe (`fusion`/`fusion_main`),
+  so a wedge is now detectable (`server:true, fusion:false`) instead of an opaque
+  timeout. MCP `health()` and the integration harness use `?deep=1`.
+
+**Adversarial multi-agent review** (22 agents, find→verify) of the recent changes
+found 11 confirmed issues; all fixed:
+- **[high] Unbounded sample count → main-thread wedge.** `_resolve_samples` had no
+  upper cap, so an FR-8.3 `samples` expression like `10*N` (large N) or a stored
+  `samples=5_000_000` would run millions of evaluations on the main thread (decimate
+  caps only the spline FIT, not the sample count). Added `MAX_SAMPLES=100_000`
+  clamp-and-log. *This was the one non-interactive blocking path the modal fix didn't
+  cover.*
+- **[med] Raw ZeroDivisionError/OverflowError** from a `samples` expression now wrap
+  into a diagnostic `SamplingError` (broadened excepts in `_resolve_samples`).
+- **[med] `/health` liveness regression in the harness** — harness now asserts
+  `?deep=1`'s `fusion` flag; stale `/health` contract in this doc updated.
+- **[low] samples leading whitespace** (`"  10  "`) stripped before eval.
+- **[low] live-validation independent-var mismatch** — the validator treated `t` as
+  always-known; now it mirrors the sampler exactly (always-injected `x`/`a` + the
+  resolved `var`), so `y=sin(t)` with `var=x` is correctly flagged. Also cached the
+  reserved-name set + Evaluator on the per-keystroke path.
+- **[low] hardening:** `_dump_inputs` now includes origin/rotation fields; create/edit
+  except handlers bind `inputs=None` first; `set_modals` armed via env; test mock
+  stores TextBox text under `formattedText`.
+
+Verification: 61 `pytest` green (+4 for the caps/wrapping/whitespace/validator tests).
 
 ### Spec re-review (v0.1 + v0.2) vs implementation — gap closure 2026-06-19
 

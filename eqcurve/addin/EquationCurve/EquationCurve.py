@@ -47,12 +47,20 @@ def run(context):
                                 _app.version, eqlog.log_path())
     except Exception:
         pass
+    # Headless/automation arming: EQCURVE_NO_MODAL=1 suppresses error message
+    # boxes entirely (they also auto-close after a timeout, but this skips them).
+    try:
+        if os.environ.get("EQCURVE_NO_MODAL"):
+            custom_feature.set_modals(False)
+    except Exception:
+        pass
     try:
         custom_feature.register(_app, _ui)
     except Exception:
-        # NEVER pop a modal here: run() executes on load/reload (incl. headless
-        # bridge reloads), and a blocking messageBox with no human to dismiss it
-        # wedges Fusion's main thread. Log richly instead (file + Text Commands).
+        # Log richly, then show an AUTO-CLOSING modal (custom_feature._modal):
+        # it self-dismisses after a timeout and is suppressed entirely when
+        # EQCURVE_NO_MODAL is set, so a failed (even bridge-driven) reload can
+        # never wedge the main thread the way a plain messageBox did.
         try:
             from eqcurve.core import eqlog
             eqlog.report("EquationCurve.run")
@@ -61,13 +69,18 @@ def run(context):
                 _app.log("Equation Curve add-in failed to start:\n" + traceback.format_exc())
             except Exception:
                 pass
+        try:
+            custom_feature._modal("Equation Curve add-in failed to start.\n"
+                                  "(details in the log / Text Commands)",
+                                  "Equation Curve add-in")
+        except Exception:
+            pass
 
 
 def stop(context):
     try:
         custom_feature.unregister()
     except Exception:
-        # log-only (see run): stop() also runs during automated reloads.
         try:
             from eqcurve.core import eqlog
             eqlog.report("EquationCurve.stop")
@@ -76,3 +89,9 @@ def stop(context):
                 _app.log("Add-in stop failed:\n" + traceback.format_exc())
             except Exception:
                 pass
+        try:
+            custom_feature._modal("Equation Curve add-in failed to stop cleanly.\n"
+                                  "(details in the log / Text Commands)",
+                                  "Equation Curve add-in")
+        except Exception:
+            pass
