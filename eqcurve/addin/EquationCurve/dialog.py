@@ -131,6 +131,9 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
     inputs.addBoolValueInput("deg", "Degrees", True, "", cd.angle == "deg")
     inputs.addBoolValueInput("adaptive", "Adaptive sampling", True, "", cd.adaptive)
     inputs.addStringValueInput("tol", "Fit tolerance mm (0=off)", str(cd.tolerance))
+    # sketch-embed only: fix the spline points so the sketch is fully defined by
+    # the equation (untick to leave it movable / under-defined).
+    inputs.addBoolValueInput("fixcurve", "Fix to equation (fully define)", True, "", True)
 
     # collapsible tutorial / reference (FR-12.4/12.5 — examples + function list)
     grp = inputs.addGroupCommandInput("help", "Help & examples")

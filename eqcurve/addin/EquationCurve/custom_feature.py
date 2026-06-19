@@ -79,6 +79,20 @@ def _off_cm(sketch, pt_ent):
         return (0.0, 0.0, 0.0)
 
 
+def _fix_spline(sp):
+    """Fix a fitted spline's points so the sketch is fully defined by the
+    equation (the curve can no longer be dragged out of shape)."""
+    try:
+        fp = sp.fitPoints
+        for i in range(fp.count):
+            fp.item(i).isFixed = True
+    except Exception:
+        try:
+            sp.isFixed = True
+        except Exception:
+            pass
+
+
 def _resolve(design, token):
     if not token:
         return None
@@ -271,8 +285,13 @@ class _CreateExecute(adsk.core.CommandEventHandler):
                 # build_curve_runs stamps the CurveDef + marker on each spline, so
                 # the sketch is fully equation-defined and re-editable (select a
                 # spline -> Edit Equation Curve). Origin point offset honored.
-                adapter.build_curve_runs(self._sk, cd, adapter.read_design_params(design),
-                                         off_cm=_off_cm(self._sk, pt))
+                splines = adapter.build_curve_runs(
+                    self._sk, cd, adapter.read_design_params(design),
+                    off_cm=_off_cm(self._sk, pt))
+                fix = inputs.itemById("fixcurve")
+                if fix is None or fix.value:  # default: fully define (fix points)
+                    for sp in splines:
+                        _fix_spline(sp)
             else:
                 create_feature(design, cd,
                                plane_ent=_sel_entity(inputs, "plane"),
@@ -352,23 +371,58 @@ class _EditCreated(adsk.core.CommandCreatedEventHandler):
     def notify(self, args):
         try:
             cmd = args.command
+            inputs = cmd.commandInputs
+            # Double-click on a Custom Feature pre-selects it -> load directly.
             cf = _find_eqcurve_feature()
-            sp = None if cf else _find_eqcurve_spline()
-            if cf is None and sp is None:
-                cmd.commandInputs.addTextBoxCommandInput(
-                    "hint", "", "Select an equation-curve feature or spline, then Edit.", 2, True)
+            if cf is not None:
+                cd = CurveDef.from_json(cf.attributes.itemByName(_GRP, ATTR_DEF).value)
+                dialog.build_inputs(inputs, cd, _param_names())
+                ic = _PresetChanged()
+                cmd.inputChanged.add(ic)
+                _handlers.append(ic)
+                ex = _EditExecute(cf)
+                cmd.execute.add(ex)
+                _handlers.append(ex)
                 return
-            cd = (CurveDef.from_json(cf.attributes.itemByName(_GRP, ATTR_DEF).value)
-                  if cf else adapter.read_definition(sp))
-            dialog.build_inputs(cmd.commandInputs, cd, _param_names())
-            ic = _PresetChanged()
+            # Manual Edit: pick the equation-curve spline inside the command (so it
+            # works even when nothing is pre-selected — the reliable way).
+            sel = inputs.addSelectionInput("target", "Equation curve",
+                                           "Select an equation-curve spline to edit")
+            sel.addSelectionFilter("SketchCurves")
+            sel.setSelectionLimits(1, 1)
+            dialog.build_inputs(inputs, None, _param_names())
+            pre = _find_eqcurve_spline()
+            if pre is not None:
+                try:
+                    sel.addSelection(pre)
+                except Exception:
+                    pass
+                cd = adapter.read_definition(pre)
+                if cd:
+                    dialog.apply_curvedef(inputs, cd)
+            ic = _EditInputChanged()
             cmd.inputChanged.add(ic)
             _handlers.append(ic)
-            ex = _EditExecute(cf) if cf else _EditSplineExecute(sp)
+            ex = _EditSplineExecute()
             cmd.execute.add(ex)
             _handlers.append(ex)
         except Exception:
             _ui.messageBox("Edit dialog failed:\n" + traceback.format_exc())
+
+
+class _EditInputChanged(adsk.core.InputChangedEventHandler):
+    def notify(self, args):
+        try:
+            if args.input.id == "target":
+                si = args.inputs.itemById("target")
+                if si.selectionCount > 0 and adapter.is_eqcurve(si.selection(0).entity):
+                    cd = adapter.read_definition(si.selection(0).entity)
+                    if cd:
+                        dialog.apply_curvedef(args.inputs, cd)
+            else:
+                dialog.on_input_changed(args.inputs, args.input)
+        except Exception:
+            pass
 
 
 class _EditExecute(adsk.core.CommandEventHandler):
@@ -386,17 +440,20 @@ class _EditExecute(adsk.core.CommandEventHandler):
 
 
 class _EditSplineExecute(adsk.core.CommandEventHandler):
-    """Re-edit a sketch-embedded equation spline in place (rebuild all its runs)."""
-    def __init__(self, spline):
-        super().__init__()
-        self._spline = spline
-
+    """Re-edit the selected sketch-embedded equation spline (rebuild all runs)."""
     def notify(self, args):
         try:
-            cd = dialog.read_inputs(args.command.commandInputs)
+            inputs = args.command.commandInputs
+            si = inputs.itemById("target")
+            if si is None or si.selectionCount == 0:
+                return
+            sp = si.selection(0).entity
+            cd = dialog.read_inputs(inputs)
             design = _design()
-            sibs = adapter.sibling_eqcurve_splines(self._spline)
-            adapter.rebuild_curve(sibs, cd, adapter.read_design_params(design))
+            sibs = adapter.sibling_eqcurve_splines(sp)
+            new = adapter.rebuild_curve(sibs, cd, adapter.read_design_params(design))
+            for sp2 in new:          # keep it fully defined after the edit
+                _fix_spline(sp2)
         except Exception as exc:
             _ui.messageBox("Edit Equation Curve: " + _describe(exc))
 
