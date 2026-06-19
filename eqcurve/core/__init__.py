@@ -8,6 +8,7 @@ from .refs import referenced_names, circular_reference
 from .diagnostics import degenerate_points, self_intersections
 from .presets import preset_names, curvedef_for
 from .errors import describe, warnings_text
+from . import eqlog
 
 __all__ = [
     "CurveDef", "Evaluator", "ExpressionError", "reserved_names",
@@ -17,4 +18,5 @@ __all__ = [
     "degenerate_points", "self_intersections",
     "preset_names", "curvedef_for",
     "describe", "warnings_text",
+    "eqlog",
 ]
