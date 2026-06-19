@@ -53,6 +53,11 @@ def _build_functions(angle: str):
         "acos": lambda x: from_rad(math.acos(x)),
         "atan": lambda x: from_rad(math.atan(x)),
         "atan2": lambda y, x: from_rad(math.atan2(y, x)),
+        # arc* aliases so equations copied from other tools/CAD just work
+        "arcsin": lambda x: from_rad(math.asin(x)),
+        "arccos": lambda x: from_rad(math.acos(x)),
+        "arctan": lambda x: from_rad(math.atan(x)),
+        "arctan2": lambda y, x: from_rad(math.atan2(y, x)),
         # hyperbolic (native — the SolidWorks gap)
         "sinh": math.sinh,
         "cosh": math.cosh,
@@ -60,6 +65,9 @@ def _build_functions(angle: str):
         "asinh": math.asinh,
         "acosh": math.acosh,
         "atanh": math.atanh,
+        "arcsinh": math.asinh,
+        "arccosh": math.acosh,
+        "arctanh": math.atanh,
         # exp / log
         "exp": math.exp,
         "ln": math.log,

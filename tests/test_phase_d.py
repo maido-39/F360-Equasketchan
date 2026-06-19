@@ -8,7 +8,7 @@ import math
 import pytest
 
 from eqcurve.core import (
-    CurveDef, sample, sample_runs, adaptive_sample_runs, decimate,
+    CurveDef, Evaluator, sample, sample_runs, adaptive_sample_runs, decimate,
     preset_names, curvedef_for, describe, ExpressionError, SamplingError,
 )
 
@@ -101,6 +101,28 @@ def test_adaptive_deviation_tolerance_adds_points_and_is_deterministic():
     n_fine = sum(len(r) for r in adaptive_sample_runs(fine))
     assert n_fine >= n_coarse
     assert adaptive_sample_runs(fine) == adaptive_sample_runs(fine)  # deterministic
+
+
+def test_arc_aliases():
+    ev = Evaluator()
+    assert ev.eval("arctan(1)", {}) == pytest.approx(math.atan(1))
+    assert ev.eval("arcsin(1)", {}) == pytest.approx(math.asin(1))
+    assert ev.eval("arccos(0)", {}) == pytest.approx(math.acos(0))
+
+
+def test_diy_cycloidal_disc_with_params():
+    # The user's DIY cycloidal disc (uses arctan + design parameters).
+    psi = "arctan(sin((1-N)*t)/((R/(E*N))-cos((1-N)*t)))"
+    cd = CurveDef(
+        mode="parametric", coord="cartesian", dim=2,
+        exprs={"x": "(R*cos(t))-(Rr*cos(t+%s))-(E*cos(N*t))" % psi,
+               "y": "(-R*sin(t))+(Rr*sin(t+%s))+(E*sin(N*t))" % psi},
+        var="t", t_min="0", t_max="2*pi", samples=400, closed=True)
+    pts = sample(cd, {"N": 16, "Rr": 6.5, "R": 45, "E": 1.5})
+    assert len(pts) > 100
+    # max radius ~ R - Rr + E = 40 mm (15-lobe disc)
+    rmax = max((x * x + y * y) ** 0.5 for x, y, _ in pts)
+    assert 38 < rmax < 42
 
 
 def test_tolerance_roundtrips_and_old_json_defaults():
