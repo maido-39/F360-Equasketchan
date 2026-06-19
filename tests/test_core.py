@@ -137,3 +137,35 @@ def test_domain_endpoints_may_use_params():
     )
     pts = sample(cd, {"N": 5})
     assert pts[-1][0] == pytest.approx(5.0)
+
+
+# ---- FR-8.3: sample count as a parameter/expression -----------------------
+
+def test_samples_count_can_be_an_expression():
+    cd = CurveDef(
+        mode="parametric", coord="cartesian", dim=2,
+        exprs={"x": "t", "y": "t"}, var="t", t_min="0", t_max="1",
+        samples="3*K",
+    )
+    pts = sample(cd, {"K": 4})  # 3*4 = 12 points on one straight run
+    assert len(pts) == 12
+
+
+def test_samples_expression_below_two_raises():
+    cd = CurveDef(
+        mode="parametric", coord="cartesian", dim=2,
+        exprs={"x": "t", "y": "t"}, var="t", t_min="0", t_max="1",
+        samples="K",
+    )
+    with pytest.raises(SamplingError):
+        sample(cd, {"K": 1})
+
+
+def test_samples_invalid_expression_raises_sampling_error():
+    cd = CurveDef(
+        mode="parametric", coord="cartesian", dim=2,
+        exprs={"x": "t", "y": "t"}, var="t", t_min="0", t_max="1",
+        samples="nope(",  # not parseable
+    )
+    with pytest.raises(SamplingError):
+        sample(cd, {})

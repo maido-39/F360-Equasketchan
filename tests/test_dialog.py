@@ -183,3 +183,49 @@ def test_help_group_present():
     dialog.build_inputs(mi, None, [])
     assert mi.itemById("help") is not None
     assert mi.itemById("param_insert") is not None
+
+
+# --- FR-8.3: samples may be a parameter/expression ---------------------------
+
+def test_samples_expression_roundtrips():
+    cd = CurveDef(mode="parametric", coord="cartesian", dim=2,
+                  exprs={"x": "t", "y": "t"}, var="t", t_min="0", t_max="1",
+                  samples="10*N")
+    mi = MockInputs()
+    dialog.build_inputs(mi, cd, ["N"])
+    got = dialog.read_inputs(mi)
+    assert got.samples == "10*N"
+
+
+def test_samples_plain_integer_stays_int():
+    mi = MockInputs()
+    dialog.build_inputs(mi, None, [])
+    mi.itemById("samples").value = "150"
+    assert dialog.read_inputs(mi).samples == 150
+
+
+# --- FR-7.3: live expression validation --------------------------------------
+
+def test_live_validation_flags_syntax_error():
+    mi = MockInputs()
+    dialog.build_inputs(mi, None, ["D3"])
+    mi.itemById("ey").value = "sin(t"   # unbalanced parenthesis
+    dialog.on_input_changed(mi, _Changed("ey"))
+    assert "Error" in mi.itemById("status").formattedText
+
+
+def test_live_validation_flags_unknown_name():
+    mi = MockInputs()
+    dialog.build_inputs(mi, None, ["D3"])
+    mi.itemById("ey").value = "Q*sin(t)"   # Q is not a known parameter
+    dialog.on_input_changed(mi, _Changed("ey"))
+    txt = mi.itemById("status").formattedText
+    assert "unrecognized" in txt and "Q" in txt
+
+
+def test_live_validation_ok_for_known_param():
+    mi = MockInputs()
+    dialog.build_inputs(mi, None, ["D3"])
+    mi.itemById("ey").value = "D3*sin(t)"
+    dialog.on_input_changed(mi, _Changed("ey"))
+    assert "OK" in mi.itemById("status").formattedText

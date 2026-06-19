@@ -132,6 +132,66 @@ Deferred (spec [S]/[C], not in the approved plan): FR-1.3 per-component laws,
 FR-8.4 promote-constant-to-param, FR-9.4/9.5 scale/mirror/snap, FR-1.5 surface
 module. (FR-10.3 fit tolerance has since been implemented.)
 
+### Spec re-review (v0.1 + v0.2) vs implementation — gap closure 2026-06-19
+
+Re-read both spec documents end-to-end and audited every requirement against the
+code (not the prior DoD checklist). Result: **all [M] (Must) requirements are now
+implemented.** The audit found two genuine gaps and a latent associativity miss,
+all now fixed; the remaining open items are all [S]/[C]/[W] (documented below).
+
+**Closed this pass**
+
+- **FR-8.3 [M] — sample count may be a parameter/expression.** Previously
+  `CurveDef.samples` was a plain `int` (t_min/t_max/origin/rotation already
+  accepted expressions, but the count did not). Now `samples` accepts an
+  expression string (e.g. `10*N`) resolved through the evaluator at sample time
+  (`sampler._resolve_samples`, clamped ≥ 2, deterministic). The dialog field
+  changed from an integer spinner to a string input; a plain number still
+  round-trips as an `int` (back-compatible). Tests: `test_samples_count_can_be_
+  an_expression`, `test_samples_expression_below_two_raises`,
+  `test_samples_invalid_expression_raises_sampling_error`,
+  `test_samples_expression_roundtrips`, `test_samples_plain_integer_stays_int`.
+- **FR-7.3 [S] — real-time expression validation.** The dialog now parses every
+  expression field on each change and shows a Validation line: the first syntax
+  error (named field + message), or any unrecognized identifier that is neither a
+  built-in, the independent variable, nor a known design parameter (a "Note", so
+  you see *why it would error* before committing), or "OK". `dialog._validate_
+  current` / `_refresh_status`, wired through the existing `on_input_changed`.
+  Tests: `test_live_validation_flags_syntax_error / _unknown_name / _ok_for_known_param`.
+- **FR-8.2 latent fix — rotation & sample-count params are now mirrored.**
+  `refs.referenced_names` previously scanned only component exprs + domain +
+  origin; it now also scans `rotation` and a `samples` expression, so a parameter
+  that drives only rotation or the point count still registers a dependency and
+  triggers recompute. Test: `test_referenced_names_includes_rotation_and_samples`.
+
+**Audited present (sampling of [M] items often assumed missing)**
+
+- Function library complete incl. `cot sec csc` (FR-5.1), `atan2` (FR-5.2),
+  native hyperbolics + inverses (FR-5.3/5.4), `cbrt` and two-arg `log(x, base)`
+  (FR-5.5), `pi e tau phi` (FR-6.1/6.2), and `arc*` aliases for pasted equations.
+- Independent-variable rename `var` (FR-3.2) is a dialog field; closed-curve flag
+  (FR-10.4) and degree/radian (FR-2.3) present; origin (FR-9.2) and Euler rotation
+  (FR-9.3) are expression fields (parameter-referenceable).
+
+**Still open — all [S]/[C]/[W], intentionally deferred (not [M])**
+
+- FR-1.3 [S] per-component mixed laws (NX-style). *Substantially covered*: in
+  parametric mode each of x/y/z is already an independent expression in `t`
+  (a constant component is just `5`); the only un-covered NX nuance is defining
+  one component explicitly in terms of another axis.
+- FR-8.4 [S] promote a local constant to a real design parameter.
+- FR-8.5 [S] *auto-suggest* a unit correction (the mm/angle convention is already
+  applied; only the interactive "insert 1 mm/1 rad" suggestion is absent).
+- FR-10.5 [S] choose spline degree / interpolate-vs-approximate.
+- FR-11.6 [S] richer change-impact display (Fusion's native yellow "needs
+  compute" marker is the current signal).
+- FR-1.4 [C] implicit `f(x,y)=0`, FR-5.7 [C] gamma/Bessel, FR-7.4 [C] long-formula
+  editor, FR-9.4 [C] scale/mirror, FR-10.7 [C] arc/line approximation,
+  FR-1.5 [W] `z=f(x,y)` surface module.
+
+Verification: 57 `pytest` green (was 48; +9 for the above). Live re-verification in
+Fusion deferred while the bridge main thread recovers from the UI-refresh pass.
+
 ### Modeling validation + UX pass — 2026-06-19
 
 Built and verified real modeling cases live (small, split calls per PC-9 after a

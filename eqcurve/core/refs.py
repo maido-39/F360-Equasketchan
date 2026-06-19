@@ -34,11 +34,16 @@ def _names_in(expr: str) -> Set[str]:
 def referenced_names(cd: CurveDef) -> Set[str]:
     """Return external design-parameter names referenced by `cd`.
 
-    Scans every component expression, the domain endpoints, and the origin,
-    then removes built-in functions/constants and the independent variable.
+    Scans every component expression, the domain endpoints, the origin, the
+    rotation, and the sample-count expression, then removes built-in
+    functions/constants and the independent variable. Anything a referenced
+    parameter drives (incl. rotation/sample-count) is mirrored for recompute.
     """
     exprs = list(cd.exprs.values()) + [cd.t_min, cd.t_max]
     exprs += list((cd.origin or {}).values())
+    exprs += list((cd.rotation or {}).values())
+    if isinstance(cd.samples, str):
+        exprs.append(cd.samples)
 
     found: Set[str] = set()
     for e in exprs:

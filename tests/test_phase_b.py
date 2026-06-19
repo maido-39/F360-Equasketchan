@@ -96,6 +96,17 @@ def test_referenced_names():
     assert names == {"D3", "D4", "N"}  # excludes x, sin, pi
 
 
+def test_referenced_names_includes_rotation_and_samples():
+    # params driving rotation and the sample-count expression must be mirrored
+    # too, so editing them re-fires recompute (FR-8.2 / FR-8.3).
+    cd = CurveDef(
+        mode="parametric", coord="cartesian", dim=2,
+        exprs={"x": "t", "y": "t"}, var="t", t_min="0", t_max="1",
+        samples="10*K", rotation={"x": "0", "y": "0", "z": "ANG"},
+    )
+    assert referenced_names(cd) == {"K", "ANG"}
+
+
 def test_circular_ref_rejected():
     assert circular_reference({"A": "B + 1", "B": "A + 1"}) == {"A", "B"}
     assert circular_reference({"A": "1", "B": "A + 1"}) == set()  # acyclic

@@ -206,6 +206,27 @@ def _split_on_speed(run, gap_factor: float):
     return segs
 
 
+def _resolve_samples(cd: CurveDef, ev: Evaluator, params: Mapping[str, float]) -> int:
+    """Point count, allowing a parameter/expression (FR-8.3). Clamped to >= 2.
+
+    ``cd.samples`` is normally an int but may be an expression string such as
+    ``"10*N"`` so the resolution can be driven by a design parameter.
+    """
+    s = cd.samples
+    if isinstance(s, str):
+        try:
+            s = ev.eval(s, params)
+        except ExpressionError as exc:
+            raise SamplingError("samples expression %r is invalid: %s" % (cd.samples, exc))
+    try:
+        n = int(round(float(s)))
+    except (TypeError, ValueError):
+        raise SamplingError("samples did not evaluate to a number: %r" % (cd.samples,))
+    if n < 2:
+        raise SamplingError("samples must be >= 2 (got %d from %r)" % (n, cd.samples))
+    return n
+
+
 def _domain(cd: CurveDef, params: Mapping[str, float]):
     cd.validate()
     ev = Evaluator(angle=cd.angle)
@@ -226,14 +247,14 @@ def _domain(cd: CurveDef, params: Mapping[str, float]):
         _angle_to_rad(ev.eval(rotd.get("y", "0"), params), cd.angle),
         _angle_to_rad(ev.eval(rotd.get("z", "0"), params), cd.angle),
     )
-    return ev, t0, t1, origin, rot, _component_keys(cd)
+    n = _resolve_samples(cd, ev, params)
+    return ev, t0, t1, origin, rot, _component_keys(cd), n
 
 
 def sample_runs(cd: CurveDef, params: Optional[Mapping[str, float]] = None) -> List[Run]:
     """Uniformly sample the curve, returning singularity-split runs (mm)."""
     params = dict(params or {})
-    ev, t0, t1, origin, rot, keys = _domain(cd, params)
-    n = cd.samples
+    ev, t0, t1, origin, rot, keys, n = _domain(cd, params)
     tvals = [t0 + (t1 - t0) * (i / (n - 1)) for i in range(n)]
     raw = [(u, _eval_one(cd, params, ev, keys, u, origin, rot)) for u in tvals]
     runs = _segment(raw)
@@ -288,8 +309,8 @@ def adaptive_sample_runs(
     curve and the thresholds, so output is deterministic (NFR-4).
     """
     params = dict(params or {})
-    ev, t0, t1, origin, rot, keys = _domain(cd, params)
-    seed = max(2, min(seed, cd.samples))
+    ev, t0, t1, origin, rot, keys, n = _domain(cd, params)
+    seed = max(2, min(seed, n))
     tol = math.radians(angle_tol_deg)
     dev_tol = cd.tolerance if cd.tolerance and cd.tolerance > 0 else None  # mm (FR-10.3)
 

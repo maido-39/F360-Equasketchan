@@ -36,7 +36,8 @@ class CurveDef:
     var: str = "t"                    # independent variable name
     t_min: str = "0"                  # expressions allowed (may use params)
     t_max: str = "1"
-    samples: int = 200                # number of points (deterministic)
+    samples: object = 200             # point count; int OR an expression string
+                                      # (may reference design params, FR-8.3)
     closed: bool = False              # force-close start==end
     adaptive: bool = False            # deterministic curvature-adaptive sampling (FR-10.2)
     tolerance: float = 0.0            # max chord deviation in mm for adaptive (0 = angle only, FR-10.3)
@@ -72,7 +73,11 @@ class CurveDef:
             raise ValueError(f"coord for dim {self.dim} must be one of {valid_coords}")
         if self.angle not in ("rad", "deg"):
             raise ValueError("angle must be 'rad' or 'deg'")
-        if self.samples < 2:
+        if isinstance(self.samples, str):
+            # an expression (e.g. "10*N"); resolved+range-checked at sample time
+            if not self.samples.strip():
+                raise ValueError("samples expression must not be empty")
+        elif self.samples < 2:
             raise ValueError("samples must be >= 2")
         if not self.exprs:
             raise ValueError("exprs must not be empty")

@@ -8,9 +8,12 @@ re-opens with every field exactly as saved (FR-11.2, lossless round-trip).
 
 from __future__ import annotations
 
+import ast
+
 import adsk.core
 
 from eqcurve.core import CurveDef, preset_names, curvedef_for
+from eqcurve.core.evaluator import Evaluator, ExpressionError, reserved_names
 
 _TEXTLIST = adsk.core.DropDownStyles.TextListDropDownStyle
 _CUSTOM = "(custom)"
@@ -25,8 +28,11 @@ _COORDS = ("cartesian", "polar", "cylindrical", "spherical")
 
 _INSERT_HINT = "(insert parameter…)"
 # expression-bearing fields; the last one edited receives an inserted parameter
-_EXPR_FIELDS = ("ex", "ey", "ez", "tmin", "tmax", "ox", "oy", "oz", "rx", "ry", "rz")
+_EXPR_FIELDS = ("ex", "ey", "ez", "tmin", "tmax", "samples",
+                "ox", "oy", "oz", "rx", "ry", "rz")
 _last_field = {"id": "ey"}
+# design-parameter names known to the dialog, for live unknown-name detection
+_known_params = {"names": []}
 
 # Tutorial / reference text (Inventor Equation-Curve style). FR-12 tutorial+intuitive.
 _HELP_HOWTO = (
@@ -77,6 +83,7 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
                  param_names=None) -> None:
     cd = cd or _DEFAULT
     _last_field["id"] = "ey"
+    _known_params["names"] = list(param_names or [])
 
     pin = inputs.addDropDownCommandInput("preset", "Preset", _TEXTLIST)
     pin.listItems.add(_CUSTOM, True)
@@ -103,7 +110,8 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
     inputs.addStringValueInput("var", "Independent var", cd.var)
     inputs.addStringValueInput("tmin", "t min", cd.t_min)
     inputs.addStringValueInput("tmax", "t max", cd.t_max)
-    inputs.addIntegerSpinnerCommandInput("samples", "Samples", 2, 20000, 1, cd.samples)
+    # samples may be a plain count OR an expression (e.g. 10*N) — FR-8.3
+    inputs.addStringValueInput("samples", "Samples (or expr)", str(cd.samples))
     o = cd.origin or {}
     inputs.addStringValueInput("ox", "Origin X", o.get("x", "0"))
     inputs.addStringValueInput("oy", "Origin Y", o.get("y", "0"))
@@ -135,6 +143,10 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
     # the equation (untick to leave it movable / under-defined).
     inputs.addBoolValueInput("fixcurve", "Fix to equation (fully define)", True, "", True)
 
+    # live expression validation (FR-7.3): parses every field as you type and
+    # flags syntax errors / unknown names before you commit.
+    inputs.addTextBoxCommandInput("status", "Validation", "", 2, True)
+
     # collapsible tutorial / reference (FR-12.4/12.5 — examples + function list)
     grp = inputs.addGroupCommandInput("help", "Help & examples")
     grp.isExpanded = False
@@ -142,6 +154,8 @@ def build_inputs(inputs: adsk.core.CommandInputs, cd: CurveDef = None,
     h.addTextBoxCommandInput("help_howto", "How to", _HELP_HOWTO, 6, True)
     h.addTextBoxCommandInput("help_funcs", "Functions", _HELP_FUNCS, 5, True)
     h.addTextBoxCommandInput("help_examples", "Examples", _HELP_EXAMPLES, 5, True)
+
+    _refresh_status(inputs)  # initial validation pass
 
 
 def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
@@ -155,7 +169,7 @@ def apply_curvedef(inputs: adsk.core.CommandInputs, cd: CurveDef) -> None:
     inputs.itemById("var").value = cd.var
     inputs.itemById("tmin").value = cd.t_min
     inputs.itemById("tmax").value = cd.t_max
-    inputs.itemById("samples").value = cd.samples
+    inputs.itemById("samples").value = str(cd.samples)
     o = cd.origin or {}
     inputs.itemById("ox").value = o.get("x", "0")
     inputs.itemById("oy").value = o.get("y", "0")
@@ -180,13 +194,11 @@ def on_input_changed(inputs: adsk.core.CommandInputs, changed_input) -> None:
     cid = changed_input.id
     if cid in _EXPR_FIELDS:
         _last_field["id"] = cid
-        return
-    if cid == "preset":
+    elif cid == "preset":
         name = inputs.itemById("preset").selectedItem.name
         if name != _CUSTOM:
             apply_curvedef(inputs, curvedef_for(name))
-        return
-    if cid == "param_insert":
+    elif cid == "param_insert":
         sel = inputs.itemById("param_insert").selectedItem
         if sel and sel.name != _INSERT_HINT:
             fld = inputs.itemById(_last_field["id"])
@@ -194,6 +206,72 @@ def on_input_changed(inputs: adsk.core.CommandInputs, changed_input) -> None:
                 cur = fld.value or ""
                 fld.value = (cur + sel.name) if (not cur or cur[-1:] in " (+-*/^,") else (cur + "*" + sel.name)
             inputs.itemById("param_insert").listItems.item(0).isSelected = True  # reset
+    _refresh_status(inputs)  # re-validate after every change (FR-7.3)
+
+
+# expression-bearing fields validated live, with a friendly label each (FR-7.3)
+_VALIDATE_FIELDS = (
+    ("x(t)/r(t)", "ex"), ("y/r/theta", "ey"), ("z/phi/theta", "ez"),
+    ("t min", "tmin"), ("t max", "tmax"), ("samples", "samples"),
+    ("origin X", "ox"), ("origin Y", "oy"), ("origin Z", "oz"),
+    ("rotation X", "rx"), ("rotation Y", "ry"), ("rotation Z", "rz"),
+)
+
+
+def _idents(expr: str):
+    """Identifier names in an expression ({} on a syntax error)."""
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return set()
+    return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+
+
+def _validate_current(inputs: adsk.core.CommandInputs) -> str:
+    """Parse every expression field; return an HTML status line (FR-7.3).
+
+    Reports the first syntax error, else any names that are neither a built-in
+    nor a known design parameter nor the independent variable, else OK.
+    """
+    di = inputs.itemById("deg")
+    angle = "deg" if (di is not None and di.value) else "rad"
+    vi = inputs.itemById("var")
+    var = (vi.value.strip() if (vi is not None and vi.value) else "") or "t"
+
+    ev = Evaluator(angle=angle)
+    reserved = reserved_names(angle)
+    known = set(_known_params["names"]) | {var, "t", "x", "a"}
+    unknown = set()
+    for label, fid in _VALIDATE_FIELDS:
+        fld = inputs.itemById(fid)
+        expr = (getattr(fld, "value", "") or "").strip() if fld is not None else ""
+        if not expr:
+            continue
+        try:
+            ev.compile(expr)
+        except ExpressionError as exc:
+            return "<b>Error</b> in %s: %s" % (label, exc)
+        for nm in _idents(expr):
+            if nm not in reserved and nm not in known:
+                unknown.add(nm)
+    if unknown:
+        return ("<b>Note</b> &mdash; unrecognized name(s): %s. Define them in "
+                "Parameters, or check spelling." % ", ".join(sorted(unknown)))
+    return "<b>OK</b> &mdash; all expressions parse."
+
+
+def _refresh_status(inputs: adsk.core.CommandInputs) -> None:
+    """Update the Validation textbox; never let validation break the dialog."""
+    st = inputs.itemById("status")
+    if st is None:
+        return
+    try:
+        st.formattedText = _validate_current(inputs)
+    except Exception:
+        try:
+            st.formattedText = ""
+        except Exception:
+            pass
 
 
 def read_inputs(inputs: adsk.core.CommandInputs) -> CurveDef:
@@ -222,7 +300,7 @@ def read_inputs(inputs: adsk.core.CommandInputs) -> CurveDef:
         mode=mode, coord=coord, dim=dim, angle="deg" if deg else "rad",
         exprs=exprs, var=var,
         t_min=inputs.itemById("tmin").value, t_max=inputs.itemById("tmax").value,
-        samples=inputs.itemById("samples").value,
+        samples=_samples_value(inputs.itemById("samples").value),
         origin={"x": inputs.itemById("ox").value,
                 "y": inputs.itemById("oy").value,
                 "z": inputs.itemById("oz").value},
@@ -240,3 +318,13 @@ def _to_float(text) -> float:
         return float(str(text).strip())
     except (TypeError, ValueError):
         return 0.0
+
+
+def _samples_value(text):
+    """Parse the Samples field: a plain int when numeric, else the expression
+    string (so it can reference a design parameter — FR-8.3)."""
+    s = str(text).strip()
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return s or 200
